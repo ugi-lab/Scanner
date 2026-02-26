@@ -4,22 +4,41 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>Сканер прийому товару</title>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jsQR/1.4.0/jsQR.min.js"></script>
 <script>
-// Fallback: якщо jsQR не завантажився — пробуємо інший CDN
-if (typeof jsQR === 'undefined') {
+// Load jsQR with fallback, track when ready
+window.jsQRReady = false;
+function loadScript(url, onload) {
   var s = document.createElement('script');
-  s.src = 'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js';
+  s.src = url;
+  s.onload = onload;
+  s.onerror = function() {
+    // try next CDN
+    if (url.includes('cloudflare')) {
+      loadScript('https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js', onload);
+    }
+  };
   document.head.appendChild(s);
 }
+loadScript('https://cdnjs.cloudflare.com/ajax/libs/jsQR/1.4.0/jsQR.min.js', function() {
+  window.jsQRReady = true;
+});
 </script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
-if (typeof XLSX === 'undefined') {
-  var s2 = document.createElement('script');
-  s2.src = 'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js';
-  document.head.appendChild(s2);
+function loadScript2(url, onload) {
+  var s = document.createElement('script');
+  s.src = url;
+  s.onload = onload;
+  s.onerror = function() {
+    if (url.includes('cloudflare')) {
+      loadScript2('https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js', onload);
+    }
+  };
+  document.head.appendChild(s);
 }
+window.xlsxReady = false;
+loadScript2('https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js', function() {
+  window.xlsxReady = true;
+});
 </script>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700;800&family=Noto+Sans:wght@400;500;600;700&display=swap');
@@ -1283,40 +1302,44 @@ function renderRecentScans() {
 }
 
 // ======================== CAMERA ========================
-let stream = null, scanning = false, animFrame = null, cameraFacing = 'environment';
+let stream = null, scanTimer = null, cameraFacing = 'environment';
 
 async function startCamera() {
+  // jsQR може ще завантажуватись — почекаємо до 5 секунд
+  let waited = 0;
+  while (typeof jsQR === 'undefined' && waited < 5000) {
+    await new Promise(r => setTimeout(r, 200));
+    waited += 200;
+  }
   if (typeof jsQR === 'undefined') {
-    toast('❌ Бібліотека jsQR не завантажилась. Перевір інтернет і оновлення сторінку.');
+    toast('❌ jsQR не завантажився. Перевір інтернет і оновлення сторінку.');
     return;
   }
   try {
     if (stream) stopCamera();
     stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: { ideal: cameraFacing }, width: { ideal: 1920 }, height: { ideal: 1080 } }
+      video: { facingMode: { ideal: cameraFacing }, width: { ideal: 1280 }, height: { ideal: 720 } }
     });
     const video = document.getElementById('qrVideo');
     video.srcObject = stream;
-    await new Promise((res, rej) => { video.onloadedmetadata = res; video.onerror = rej; });
     await video.play();
-    scanning = true;
     document.getElementById('cam-placeholder').style.display = 'none';
     document.getElementById('scan-frame').style.display = 'flex';
     document.getElementById('btn-start').style.display = 'none';
     document.getElementById('btn-stop').style.display = '';
     document.getElementById('btn-flip').style.display = '';
-    scanLoop();
+    // setInterval — надійніше за requestAnimationFrame на Android Chrome
+    scanTimer = setInterval(scanLoop, 300);
   } catch(e) {
     toast('❌ Камера недоступна: ' + e.message);
   }
 }
 
 function stopCamera() {
-  scanning = false;
-  if (animFrame) cancelAnimationFrame(animFrame);
+  if (scanTimer) { clearInterval(scanTimer); scanTimer = null; }
   if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
   const video = document.getElementById('qrVideo');
-  video.srcObject = null;
+  if (video) video.srcObject = null;
   document.getElementById('cam-placeholder').style.display = 'flex';
   document.getElementById('scan-frame').style.display = 'none';
   document.getElementById('btn-start').style.display = '';
@@ -1333,15 +1356,17 @@ let lastScanned = '';
 let lastScannedTime = 0;
 
 function scanLoop() {
-  if (!scanning) return;
   const video  = document.getElementById('qrVideo');
   const canvas = document.getElementById('qrCanvas');
-  if (video.readyState === video.HAVE_ENOUGH_DATA && video.videoWidth > 0) {
-    canvas.width  = video.videoWidth;
-    canvas.height = video.videoHeight;
-    const ctx = canvas.getContext('2d', { willReadFrequently: true });
-    ctx.drawImage(video, 0, 0);
-    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  // Wait until jsQR library is loaded and video is ready
+  if (typeof jsQR === 'undefined') return;
+  if (!video || video.readyState < 2 || video.videoWidth === 0) return;
+  canvas.width  = video.videoWidth;
+  canvas.height = video.videoHeight;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(video, 0, 0);
+  const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  try {
     let code = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: 'dontInvert' });
     if (!code) code = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: 'onlyInvert' });
     if (code && code.data) {
@@ -1352,8 +1377,7 @@ function scanLoop() {
         processScan(code.data);
       }
     }
-  }
-  animFrame = requestAnimationFrame(scanLoop);
+  } catch(e) {}
 }
 
 function manualScan() {
