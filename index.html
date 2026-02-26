@@ -40,6 +40,32 @@ loadScript2('https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js
   window.xlsxReady = true;
 });
 </script>
+<script>
+// Load jsPDF + autoTable for PDF export
+function loadScript3(url, onload, onerror) {
+  var s = document.createElement('script');
+  s.src = url;
+  s.onload = onload;
+  s.onerror = onerror || function(){};
+  document.head.appendChild(s);
+}
+window.jsPDFReady = false;
+loadScript3('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js', function() {
+  loadScript3('https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js', function() {
+    window.jsPDFReady = true;
+  }, function() {
+    loadScript3('https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.2/dist/jspdf.plugin.autotable.min.js', function() {
+      window.jsPDFReady = true;
+    });
+  });
+}, function() {
+  loadScript3('https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js', function() {
+    loadScript3('https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.2/dist/jspdf.plugin.autotable.min.js', function() {
+      window.jsPDFReady = true;
+    });
+  });
+});
+</script>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700;800&family=Noto+Sans:wght@400;500;600;700&display=swap');
 
@@ -806,7 +832,10 @@ loadScript2('https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js
   </div>
 
   <div style="display:flex;gap:8px;margin:12px 0">
-    <button class="btn btn-primary btn-full" onclick="printReport()">🖨 Друк / PDF</button>
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-primary btn-full" onclick="exportXLSX()">📊 Експорт Excel</button>
+      <button class="btn btn-secondary btn-full" onclick="printReport()">🖨 Друк</button>
+    </div>
   </div>
 
   <div style="overflow-x:auto">
@@ -1237,11 +1266,26 @@ function processScan(raw) {
   }
 
   // Success
-  const isFirst = fact === 1;
-  const color = isFirst ? 'green' : 'blue';
-  const label = isFirst ? '🟢 Перше місце' : '🔵 Додаткове місце';
+  // Check if this client already has ANY scans (across all orders)
+  const clientName = reg.client_name.toLowerCase().trim();
+  const clientAlreadyHasScans = state.scans.some(s => s.client_name.toLowerCase().trim() === clientName);
+  const isFirstForClient = !clientAlreadyHasScans;
+  const isFirstForOrder = fact === 1;
+
+  let color, label;
+  if (isFirstForClient) {
+    color = 'green';
+    label = '🟢 Перше місце';
+  } else if (isFirstForOrder) {
+    // First place of this order, but client already has other goods
+    color = 'orange';
+    label = '⚠️ Клієнт вже має товар — поклади разом!';
+  } else {
+    color = 'blue';
+    label = '🔵 Додаткове місце';
+  }
   showStatus(color, label, reg.client_name, order_number, fact, place, total, expected);
-  beep(isFirst ? 'success' : 'info');
+  beep(isFirstForClient ? 'success' : isFirstForOrder ? 'warn' : 'info');
   recordScan(order_number, reg.client_name, reg.warehouse, place, total, false, expected);
 
   // Two-address warning
@@ -1329,7 +1373,7 @@ async function startCamera() {
     document.getElementById('btn-stop').style.display = '';
     document.getElementById('btn-flip').style.display = '';
     // setInterval — надійніше за requestAnimationFrame на Android Chrome
-    scanTimer = setInterval(scanLoop, 300);
+    scanTimer = setInterval(scanLoop, 200);
   } catch(e) {
     toast('❌ Камера недоступна: ' + e.message);
   }
@@ -1532,43 +1576,215 @@ function renderReportTable() {
   `;
 }
 
-function printReport() {
-  const rows = state.registry[selectedReportWh] || [];
+function exportXLSX() {
+  if (!window.xlsxReady) {
+    toast('⏳ XLSX-бібліотека завантажується, спробуй ще раз...');
+    return;
+  }
+
   const whName = getWhName(selectedReportWh);
   const date = new Date().toLocaleDateString('uk-UA');
 
-  const tbl = document.getElementById('report-table').outerHTML;
-  const stats = document.getElementById('report-stats').innerHTML;
+  // Build data rows (same logic as renderReportTable)
+  const rows = state.registry[selectedReportWh] || [];
+  const scans = state.scans.filter(s => s.warehouse === selectedReportWh);
+  const scanMap = {};
+  scans.forEach(s => {
+    if (!scanMap[s.order_number]) scanMap[s.order_number] = { fact: 0, client_name: s.client_name, manual: s.manual };
+    scanMap[s.order_number].fact++;
+  });
+  state.scans.filter(s => s.warehouse === 'manual' || s.warehouse === selectedReportWh).forEach(s => {
+    if (!rows.find(r => r.order_number === s.order_number) && s.manual) {
+      if (!scanMap[s.order_number]) scanMap[s.order_number] = { fact: 0, client_name: s.client_name, manual: true };
+      scanMap[s.order_number].fact++;
+    }
+  });
 
-  const win = window.open('', '_blank');
-  win.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8">
-  <title>Звіт ${whName} ${date}</title>
-  <style>
-    body{font-family:Arial,sans-serif;font-size:12px;padding:20px;color:#000}
-    h1{font-size:18px;margin-bottom:4px}
-    .sub{color:#666;margin-bottom:16px}
-    table{width:100%;border-collapse:collapse;margin-top:12px}
-    th{background:#f0f0f0;padding:6px 8px;text-align:left;border:1px solid #ccc;font-size:11px}
-    td{padding:6px 8px;border:1px solid #ddd;font-size:11px}
-    .stats{display:flex;gap:20px;margin-bottom:12px}
-    .stat{text-align:center}
-    .stat-v{font-size:22px;font-weight:700}
-    .sign{margin-top:40px;display:flex;gap:60px}
-    .sign-line{border-top:1px solid #000;padding-top:4px;min-width:150px;margin-top:20px}
-    @media print{body{padding:10px}}
-    .status-ok{color:green} .status-under{color:orange} .status-over{color:red} .status-unreg{color:red}
-  </style></head><body>
-  <h1>Звіт прийому товару — ${whName}</h1>
-  <div class="sub">Дата: ${date}</div>
-  <div class="stats">${stats.replace(/class="stat-val"/g,'class="stat-v"').replace(/class="stat-lbl"/g,'style="font-size:10px;color:#666"').replace(/class="stat-box"/g,'class="stat"')}</div>
-  ${tbl}
-  <div class="sign">
-    <div><div class="sign-line">Підпис працівника</div></div>
-    <div><div class="sign-line">Підпис завідувача</div></div>
-  </div>
-  </body></html>`);
-  win.document.close();
-  setTimeout(() => win.print(), 500);
+  const allOrders = new Set([...rows.map(r => r.order_number), ...Object.keys(scanMap)]);
+  let totalExp = 0, totalFact = 0;
+
+  const dataRows = [];
+  allOrders.forEach(ord => {
+    const reg = rows.find(r => r.order_number === ord);
+    const scan = scanMap[ord] || { fact: 0 };
+    const exp = reg ? (reg.expected_places || 0) : 0;
+    const fact = scan.fact;
+    totalExp += exp;
+    totalFact += fact;
+
+    let status;
+    if (!reg) status = 'Поза реєстром';
+    else if (fact === 0) status = 'Недопоставка';
+    else if (exp > 0 && fact < exp) status = 'Недопоставка';
+    else if (exp > 0 && fact > exp) status = 'Надлишок';
+    else status = 'OK';
+
+    const clientName = reg?.client_name || scan.client_name || '—';
+    const notes = [];
+    if (state.twoAddr.some(n => clientName.toLowerCase().includes(n.toLowerCase()))) notes.push('2 адреси');
+    if (scan.manual) notes.push('Вручну');
+
+    dataRows.push({
+      'Клієнт': clientName,
+      '№ замовлення': ord,
+      'Очікується': exp || '',
+      'Факт': fact,
+      'Статус': status,
+      'Примітка': notes.join(', ')
+    });
+  });
+
+  // Create workbook
+  const wb = XLSX.utils.book_new();
+
+  // Info sheet header rows then data
+  const headerInfo = [
+    ['Звіт прийому товару — ' + whName],
+    ['Дата: ' + date],
+    ['Замовлень: ' + allOrders.size + '   Очікується: ' + totalExp + '   Факт: ' + totalFact],
+    []
+  ];
+  const ws = XLSX.utils.aoa_to_sheet(headerInfo);
+
+  // Append data table starting at row 5
+  XLSX.utils.sheet_add_json(ws, dataRows, { origin: 'A5' });
+
+  // Column widths
+  ws['!cols'] = [
+    { wch: 35 }, // Клієнт
+    { wch: 18 }, // № замовлення
+    { wch: 12 }, // Очікується
+    { wch: 8  }, // Факт
+    { wch: 16 }, // Статус
+    { wch: 20 }  // Примітка
+  ];
+
+  XLSX.utils.book_append_sheet(wb, ws, whName.substring(0, 31));
+
+  // Also add a scans log sheet
+  if (state.scans.length) {
+    const scanRows = state.scans.map(s => ({
+      'Час': new Date(s.timestamp).toLocaleString('uk-UA'),
+      'Клієнт': s.client_name || '—',
+      '№ замовлення': s.order_number,
+      'Місце': s.place ? (s.place + '/' + (s.total || '?')) : '—',
+      'Склад': getWhName(s.warehouse),
+      'Вручну': s.manual ? 'Так' : ''
+    })).reverse(); // newest first
+    const wsLog = XLSX.utils.json_to_sheet(scanRows);
+    wsLog['!cols'] = [
+      { wch: 20 }, { wch: 35 }, { wch: 18 }, { wch: 10 }, { wch: 14 }, { wch: 8 }
+    ];
+    XLSX.utils.book_append_sheet(wb, wsLog, 'Лог сканувань');
+  }
+
+  const filename = 'zvit_' + whName + '_' + date.replace(/\./g, '-') + '.xlsx';
+  XLSX.writeFile(wb, filename);
+  toast('✅ Збережено: ' + filename);
+}
+
+function printReport() {
+  if (!window.jsPDFReady) {
+    toast('⏳ PDF-бібліотека завантажується, спробуй ще раз...');
+    return;
+  }
+
+  const whName = getWhName(selectedReportWh);
+  const date = new Date().toLocaleDateString('uk-UA');
+
+  // Collect table data
+  const rows = state.registry[selectedReportWh] || [];
+  const scans = state.scans.filter(s => s.warehouse === selectedReportWh);
+  const scanMap = {};
+  scans.forEach(s => {
+    if (!scanMap[s.order_number]) scanMap[s.order_number] = { fact: 0, client_name: s.client_name };
+    scanMap[s.order_number].fact++;
+  });
+
+  const allOrders = new Set([...rows.map(r => r.order_number), ...Object.keys(scanMap)]);
+  const tableRows = [];
+  let totalExp = 0, totalFact = 0;
+
+  allOrders.forEach(ord => {
+    const reg = rows.find(r => r.order_number === ord);
+    const scan = scanMap[ord] || { fact: 0 };
+    const exp = reg ? (reg.expected_places || 0) : 0;
+    const fact = scan.fact;
+    totalExp += exp;
+    totalFact += fact;
+
+    let status;
+    if (!reg) status = 'Поза реєстром';
+    else if (fact === 0) status = 'Недопоставка';
+    else if (exp > 0 && fact < exp) status = 'Недопоставка';
+    else if (exp > 0 && fact > exp) status = 'Надлишок';
+    else status = 'OK';
+
+    const notes = [];
+    const clientName = reg?.client_name || scan.client_name || '';
+    if (state.twoAddr.some(n => clientName.toLowerCase().includes(n.toLowerCase()))) notes.push('2 адреси');
+
+    tableRows.push([
+      clientName || '—',
+      ord,
+      exp || '—',
+      fact,
+      status,
+      notes.join(', ')
+    ]);
+  });
+
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+
+  // Title
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(14);
+  doc.text('Zvit pryiomu tovaru — ' + whName, 14, 15);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(10);
+  doc.text('Data: ' + date, 14, 22);
+  doc.text('Zamovlen: ' + allOrders.size + '   Ochikuvano: ' + totalExp + '   Fakt: ' + totalFact, 14, 28);
+
+  // Table
+  doc.autoTable({
+    head: [['Клієнт', '№ замовлення', 'Exp', 'Fact', 'Статус', 'Примітка']],
+    body: tableRows,
+    startY: 33,
+    styles: { font: 'helvetica', fontSize: 9, cellPadding: 2 },
+    headStyles: { fillColor: [40, 50, 60], textColor: 255, fontStyle: 'bold' },
+    columnStyles: {
+      0: { cellWidth: 60 },
+      1: { cellWidth: 35, font: 'courier' },
+      2: { cellWidth: 15, halign: 'center' },
+      3: { cellWidth: 15, halign: 'center' },
+      4: { cellWidth: 30 },
+      5: { cellWidth: 40 }
+    },
+    didParseCell: function(data) {
+      if (data.section === 'body' && data.column.index === 4) {
+        const v = data.cell.raw;
+        if (v === 'OK') data.cell.styles.textColor = [0, 150, 80];
+        else if (v === 'Надлишок') data.cell.styles.textColor = [200, 50, 50];
+        else if (v === 'Недопоставка') data.cell.styles.textColor = [200, 120, 0];
+        else if (v === 'Поза реєстром') data.cell.styles.textColor = [200, 50, 50];
+      }
+    }
+  });
+
+  // Signatures
+  const finalY = doc.lastAutoTable.finalY + 15;
+  if (finalY < 185) {
+    doc.setFontSize(9);
+    doc.line(14, finalY + 8, 74, finalY + 8);
+    doc.text('Pidpys pratsivnyka', 14, finalY + 12);
+    doc.line(100, finalY + 8, 160, finalY + 8);
+    doc.text('Pidpys zaviduvach', 100, finalY + 12);
+  }
+
+  const filename = 'zvit_' + whName.replace(/[^a-zA-Z0-9а-яА-ЯіІїЇ]/g, '_') + '_' + date.replace(/\./g, '-') + '.pdf';
+  doc.save(filename);
+  toast('✅ PDF збережено: ' + filename);
 }
 
 // ======================== SETTINGS ========================
