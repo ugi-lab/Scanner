@@ -80,7 +80,7 @@
   /* === PAGES === */
   .page { display: none; }
   .page.active { display: block; }
-  .container { padding: 16px; max-width: 480px; margin: 0 auto; }
+  .container { padding: 16px; max-width: 480px; margin: 0 auto; padding-bottom: 32px; }
 
   /* === IMPORT PAGE === */
   .section-title {
@@ -288,9 +288,9 @@
     background: #000;
     border-radius: 12px;
     overflow: hidden;
-    height: 42vh;
-    max-height: 300px;
+    height: 240px;
     margin-bottom: 12px;
+    flex-shrink: 0;
   }
   #qrVideo { width: 100%; height: 100%; object-fit: cover; display: block; }
   #qrCanvas { display: none; }
@@ -714,24 +714,24 @@
     </div>
   </div>
 
-  <!-- Camera -->
-  <div class="camera-wrap" id="camera-wrap">
-    <video id="qrVideo" autoplay playsinline muted></video>
-    <div class="camera-overlay" id="camera-overlay">
-      <div class="camera-placeholder" id="cam-placeholder">
-        <div class="cam-icon">📷</div>
-        <div>Натисни «Запустити» для сканування</div>
-      </div>
-      <div class="scan-frame" id="scan-frame" style="display:none"><span></span><div class="scan-line"></div></div>
-    </div>
-  </div>
-
-  <canvas id="qrCanvas" style="display:none">
-
+  <!-- Camera buttons — ABOVE camera so always visible -->
   <div class="cam-btns">
     <button class="btn btn-primary" id="btn-start" onclick="startCamera()" style="flex:2">▶ Запустити</button>
     <button class="btn btn-secondary" id="btn-stop" onclick="stopCamera()" style="flex:1;display:none">⏹ Стоп</button>
     <button class="btn btn-secondary" onclick="flipCamera()" id="btn-flip" title="Змінити камеру" style="display:none">🔄</button>
+  </div>
+
+  <!-- Camera -->
+  <div class="camera-wrap" id="camera-wrap">
+    <video id="qrVideo" autoplay playsinline muted></video>
+    <canvas id="qrCanvas" style="display:none"></canvas>
+    <div class="camera-overlay" id="camera-overlay">
+      <div class="camera-placeholder" id="cam-placeholder">
+        <div class="cam-icon">📷</div>
+        <div>Наведи камеру на QR-код</div>
+      </div>
+      <div class="scan-frame" id="scan-frame" style="display:none"><span></span><div class="scan-line"></div></div>
+    </div>
   </div>
 
   <!-- Manual input -->
