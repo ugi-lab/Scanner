@@ -1545,11 +1545,13 @@ function renderReportTable() {
     totalExp += exp;
     totalFact += fact;
 
+    const whObj = state.warehouses.find(w => w.id === selectedReportWh);
+    const isCenter = whObj && whObj.type === 'center';
     let statusCls, statusTxt;
     if (!reg) { statusCls = 'status-unreg'; statusTxt = 'Поза реєстром'; }
     else if (fact === 0) { statusCls = 'status-under'; statusTxt = 'Недопоставка'; }
-    else if (exp > 0 && fact < exp) { statusCls = 'status-under'; statusTxt = 'Недопоставка'; }
-    else if (exp > 0 && fact > exp) { statusCls = 'status-over'; statusTxt = 'Надлишок'; }
+    else if (!isCenter && exp > 0 && fact < exp) { statusCls = 'status-under'; statusTxt = 'Недопоставка'; }
+    else if (!isCenter && exp > 0 && fact > exp) { statusCls = 'status-over'; statusTxt = 'Надлишок'; }
     else { statusCls = 'status-ok'; statusTxt = 'OK'; }
 
     const notes = [];
@@ -1612,11 +1614,13 @@ function exportXLSX() {
     totalExp += exp;
     totalFact += fact;
 
+    const whObjX = state.warehouses.find(w => w.id === selectedReportWh);
+    const isCenterX = whObjX && whObjX.type === 'center';
     let status;
     if (!reg) status = 'Поза реєстром';
     else if (fact === 0) status = 'Недопоставка';
-    else if (exp > 0 && fact < exp) status = 'Недопоставка';
-    else if (exp > 0 && fact > exp) status = 'Надлишок';
+    else if (!isCenterX && exp > 0 && fact < exp) status = 'Недопоставка';
+    else if (!isCenterX && exp > 0 && fact > exp) status = 'Надлишок';
     else status = 'OK';
 
     const clientName = reg?.client_name || scan.client_name || '—';
@@ -1659,6 +1663,26 @@ function exportXLSX() {
     { wch: 20 }  // Примітка
   ];
 
+  // Add borders to data rows (row 5 = table header + data rows below)
+  const borderStyle = {
+    top:    { style: 'thin', color: { rgb: 'BBBBBB' } },
+    bottom: { style: 'thin', color: { rgb: 'BBBBBB' } },
+    left:   { style: 'thin', color: { rgb: 'BBBBBB' } },
+    right:  { style: 'thin', color: { rgb: 'BBBBBB' } }
+  };
+  const cols = ['A','B','C','D','E','F'];
+  // Row 5 is table header (dataRows starts at row 6 = index 5 in 1-based)
+  // sheet_add_json writes header at row 5 (A5), data from A6
+  const totalDataRows = dataRows.length + 1; // +1 for header row of table
+  for (let r = 5; r <= 4 + totalDataRows; r++) {
+    cols.forEach(c => {
+      const cellRef = c + r;
+      if (!ws[cellRef]) ws[cellRef] = { t: 's', v: '' };
+      if (!ws[cellRef].s) ws[cellRef].s = {};
+      ws[cellRef].s.border = borderStyle;
+    });
+  }
+
   XLSX.utils.book_append_sheet(wb, ws, whName.substring(0, 31));
 
   // Also add a scans log sheet
@@ -1679,7 +1703,7 @@ function exportXLSX() {
   }
 
   const filename = 'zvit_' + whName + '_' + date.replace(/\./g, '-') + '.xlsx';
-  XLSX.writeFile(wb, filename);
+  XLSX.writeFile(wb, filename, { cellStyles: true });
   toast('✅ Збережено: ' + filename);
 }
 
@@ -1713,11 +1737,13 @@ function printReport() {
     totalExp += exp;
     totalFact += fact;
 
+    const whObjX = state.warehouses.find(w => w.id === selectedReportWh);
+    const isCenterX = whObjX && whObjX.type === 'center';
     let status;
     if (!reg) status = 'Поза реєстром';
     else if (fact === 0) status = 'Недопоставка';
-    else if (exp > 0 && fact < exp) status = 'Недопоставка';
-    else if (exp > 0 && fact > exp) status = 'Надлишок';
+    else if (!isCenterX && exp > 0 && fact < exp) status = 'Недопоставка';
+    else if (!isCenterX && exp > 0 && fact > exp) status = 'Надлишок';
     else status = 'OK';
 
     const notes = [];
