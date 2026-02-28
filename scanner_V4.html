@@ -1,0 +1,2005 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Сканер прийому товару</title>
+<script>
+// Load jsQR with fallback, track when ready
+window.jsQRReady = false;
+function loadScript(url, onload) {
+  var s = document.createElement('script');
+  s.src = url;
+  s.onload = onload;
+  s.onerror = function() {
+    // try next CDN
+    if (url.includes('cloudflare')) {
+      loadScript('https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js', onload);
+    }
+  };
+  document.head.appendChild(s);
+}
+loadScript('https://cdnjs.cloudflare.com/ajax/libs/jsQR/1.4.0/jsQR.min.js', function() {
+  window.jsQRReady = true;
+});
+</script>
+<script>
+function loadScript2(url, onload) {
+  var s = document.createElement('script');
+  s.src = url;
+  s.onload = onload;
+  s.onerror = function() {
+    if (url.includes('cloudflare')) {
+      loadScript2('https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js', onload);
+    }
+  };
+  document.head.appendChild(s);
+}
+window.xlsxReady = false;
+loadScript2('https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js', function() {
+  window.xlsxReady = true;
+});
+</script>
+<script>
+// Load jsPDF + autoTable for PDF export
+function loadScript3(url, onload, onerror) {
+  var s = document.createElement('script');
+  s.src = url;
+  s.onload = onload;
+  s.onerror = onerror || function(){};
+  document.head.appendChild(s);
+}
+window.jsPDFReady = false;
+loadScript3('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js', function() {
+  loadScript3('https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js', function() {
+    window.jsPDFReady = true;
+  }, function() {
+    loadScript3('https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.2/dist/jspdf.plugin.autotable.min.js', function() {
+      window.jsPDFReady = true;
+    });
+  });
+}, function() {
+  loadScript3('https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js', function() {
+    loadScript3('https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.2/dist/jspdf.plugin.autotable.min.js', function() {
+      window.jsPDFReady = true;
+    });
+  });
+});
+</script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700;800&family=Noto+Sans:wght@400;500;600;700&display=swap');
+
+  :root {
+    --bg: #0d0f12;
+    --surface: #161a1f;
+    --surface2: #1e242c;
+    --border: #2a3240;
+    --accent: #00d4aa;
+    --accent2: #0099ff;
+    --red: #ff4d4d;
+    --orange: #ff9500;
+    --green: #00d4aa;
+    --blue: #0099ff;
+    --text: #e8edf2;
+    --text2: #8a9bb0;
+    --mono: 'JetBrains Mono', monospace;
+    --sans: 'Noto Sans', sans-serif;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+
+  body {
+    font-family: var(--sans);
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* === NAV === */
+  .nav {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 16px;
+    height: 56px;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+  }
+  .nav-logo {
+    font-family: var(--mono);
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--accent);
+    letter-spacing: 0.05em;
+  }
+  .nav-tabs {
+    display: flex;
+    gap: 4px;
+  }
+  .nav-tab {
+    background: none;
+    border: none;
+    color: var(--text2);
+    font-family: var(--sans);
+    font-size: 12px;
+    padding: 6px 10px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .nav-tab.active {
+    background: var(--surface2);
+    color: var(--accent);
+  }
+  .nav-tab:hover:not(.active) { color: var(--text); }
+
+  /* === PAGES === */
+  .page { display: none; }
+  .page.active { display: block; }
+  .container { padding: 16px; max-width: 480px; margin: 0 auto; padding-bottom: 32px; }
+
+  /* === IMPORT PAGE === */
+  .section-title {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text2);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    margin-bottom: 10px;
+  }
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px;
+    margin-bottom: 12px;
+  }
+  .drop-zone {
+    border: 2px dashed var(--border);
+    border-radius: 8px;
+    padding: 24px 16px;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.2s;
+    position: relative;
+  }
+  .drop-zone:hover, .drop-zone.dragover {
+    border-color: var(--accent);
+    background: rgba(0,212,170,0.05);
+  }
+  .drop-zone input[type=file] {
+    position: absolute;
+    inset: 0;
+    opacity: 0;
+    cursor: pointer;
+    width: 100%;
+    height: 100%;
+  }
+  .drop-icon { font-size: 28px; margin-bottom: 8px; }
+  .drop-text { font-size: 13px; color: var(--text2); }
+  .drop-text strong { color: var(--accent); }
+
+  .warehouse-select {
+    margin-top: 12px;
+  }
+  .warehouse-select label { font-size: 12px; color: var(--text2); display: block; margin-bottom: 6px; }
+  .warehouse-select select {
+    width: 100%;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 8px 10px;
+    border-radius: 8px;
+    font-family: var(--sans);
+    font-size: 13px;
+  }
+
+  .stats-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+    margin-top: 12px;
+  }
+  .stat-box {
+    background: var(--surface2);
+    border-radius: 8px;
+    padding: 10px 8px;
+    text-align: center;
+  }
+  .stat-val {
+    font-family: var(--mono);
+    font-size: 20px;
+    font-weight: 700;
+    color: var(--accent);
+  }
+  .stat-lbl { font-size: 10px; color: var(--text2); margin-top: 2px; }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 10px 16px;
+    border-radius: 8px;
+    font-family: var(--sans);
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    border: none;
+    transition: all 0.15s;
+  }
+  .btn-primary { background: var(--accent); color: #000; }
+  .btn-primary:hover { background: #00f0c0; }
+  .btn-secondary { background: var(--surface2); color: var(--text); border: 1px solid var(--border); }
+  .btn-secondary:hover { border-color: var(--accent); color: var(--accent); }
+  .btn-danger { background: rgba(255,77,77,0.15); color: var(--red); border: 1px solid rgba(255,77,77,0.3); }
+  .btn-danger:hover { background: rgba(255,77,77,0.25); }
+  .btn-full { width: 100%; }
+
+  .imported-list { margin-top: 10px; }
+  .imported-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 10px;
+    background: var(--surface2);
+    border-radius: 6px;
+    margin-bottom: 6px;
+    font-size: 12px;
+  }
+  .imported-item .badge {
+    font-family: var(--mono);
+    font-size: 10px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    background: rgba(0,212,170,0.15);
+    color: var(--accent);
+  }
+
+  /* === SCAN PAGE === */
+  .status-block {
+    border-radius: 12px;
+    padding: 20px 16px;
+    margin-bottom: 12px;
+    transition: all 0.3s;
+    border: 2px solid transparent;
+  }
+  .status-block.idle { background: var(--surface); border-color: var(--border); }
+  .status-block.green { background: rgba(0,212,170,0.12); border-color: var(--green); }
+  .status-block.blue { background: rgba(0,153,255,0.12); border-color: var(--blue); }
+  .status-block.red { background: rgba(255,77,77,0.12); border-color: var(--red); animation: pulse-red 0.6s ease; }
+  .status-block.orange { background: rgba(255,149,0,0.12); border-color: var(--orange); }
+
+  @keyframes pulse-red {
+    0%,100% { transform: scale(1); }
+    25% { transform: scale(1.01); }
+    75% { transform: scale(0.99); }
+  }
+
+  .status-indicator {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 10px;
+  }
+  .status-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+  .green .status-dot { background: var(--green); box-shadow: 0 0 8px var(--green); }
+  .blue .status-dot { background: var(--blue); box-shadow: 0 0 8px var(--blue); }
+  .red .status-dot { background: var(--red); box-shadow: 0 0 8px var(--red); }
+  .orange .status-dot { background: var(--orange); box-shadow: 0 0 8px var(--orange); }
+  .idle .status-dot { background: var(--text2); }
+
+  .status-label { font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text2); }
+  .green .status-label { color: var(--green); }
+  .blue .status-label { color: var(--blue); }
+  .red .status-label { color: var(--red); }
+  .orange .status-label { color: var(--orange); }
+
+  .client-name {
+    font-size: 24px;
+    font-weight: 800;
+    margin-bottom: 2px;
+    min-height: 30px;
+    line-height: 1.15;
+  }
+  .order-num {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--text2);
+    margin-bottom: 12px;
+  }
+  .count-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+  .count-box {
+    background: rgba(0,0,0,0.3);
+    border-radius: 8px;
+    padding: 8px 14px;
+    text-align: center;
+  }
+  .count-num {
+    font-family: var(--mono);
+    font-size: 24px;
+    font-weight: 800;
+  }
+  .count-lbl { font-size: 10px; color: var(--text2); }
+  .count-sep { font-size: 20px; color: var(--text2); }
+
+  .warning-banner {
+    display: none;
+    background: rgba(255,149,0,0.15);
+    border: 1px solid rgba(255,149,0,0.4);
+    border-radius: 8px;
+    padding: 10px 12px;
+    font-size: 13px;
+    color: var(--orange);
+    margin-top: 10px;
+  }
+  .warning-banner.show { display: flex; gap: 8px; align-items: flex-start; }
+
+  /* Camera */
+  .camera-wrap {
+    position: relative;
+    background: #000;
+    border-radius: 12px;
+    overflow: hidden;
+    height: 240px;
+    margin-bottom: 12px;
+    flex-shrink: 0;
+  }
+  #qrVideo { width: 100%; height: 100%; object-fit: cover; display: block; }
+  #qrCanvas { display: none; }
+  .camera-overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .scan-frame {
+    width: 200px;
+    height: 200px;
+    position: relative;
+  }
+  .scan-frame::before, .scan-frame::after,
+  .scan-frame span::before, .scan-frame span::after {
+    content: '';
+    position: absolute;
+    width: 24px;
+    height: 24px;
+    border-color: var(--accent);
+    border-style: solid;
+  }
+  .scan-frame::before { top: 0; left: 0; border-width: 3px 0 0 3px; }
+  .scan-frame::after { top: 0; right: 0; border-width: 3px 3px 0 0; }
+  .scan-frame span::before { bottom: 0; left: 0; border-width: 0 0 3px 3px; }
+  .scan-frame span::after { bottom: 0; right: 0; border-width: 0 3px 3px 0; }
+  .scan-line {
+    position: absolute;
+    left: 0; right: 0;
+    height: 2px;
+    background: linear-gradient(90deg, transparent, var(--accent), transparent);
+    animation: scan 2s linear infinite;
+  }
+  @keyframes scan {
+    0% { top: 0; }
+    100% { top: 100%; }
+  }
+  .camera-placeholder {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    color: var(--text2);
+    font-size: 13px;
+    gap: 8px;
+  }
+  .camera-placeholder .cam-icon { font-size: 36px; }
+
+  .cam-btns {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+
+  /* Manual input */
+  .manual-row {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+  .manual-row input {
+    flex: 1;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 10px 12px;
+    border-radius: 8px;
+    font-family: var(--mono);
+    font-size: 13px;
+  }
+  .manual-row input:focus { outline: none; border-color: var(--accent); }
+
+  /* Recent scans */
+  .scan-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 10px;
+    background: var(--surface2);
+    border-radius: 8px;
+    margin-bottom: 6px;
+    font-size: 12px;
+    border-left: 3px solid transparent;
+  }
+  .scan-item.green { border-left-color: var(--green); }
+  .scan-item.blue { border-left-color: var(--blue); }
+  .scan-item.red { border-left-color: var(--red); }
+  .scan-item-icon { font-size: 14px; }
+  .scan-item-name { font-weight: 600; flex: 1; }
+  .scan-item-order { font-family: var(--mono); color: var(--text2); font-size: 11px; }
+  .scan-item-count { font-family: var(--mono); font-size: 11px; color: var(--text2); }
+
+  /* === CLIENTS PAGE === */
+  .filter-row {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+  .filter-row input {
+    flex: 1;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 8px 12px;
+    border-radius: 8px;
+    font-family: var(--sans);
+    font-size: 13px;
+  }
+  .filter-row input:focus { outline: none; border-color: var(--accent); }
+
+  .client-row {
+    display: flex;
+    align-items: center;
+    padding: 10px 12px;
+    background: var(--surface);
+    border-radius: 10px;
+    margin-bottom: 6px;
+    border-left: 3px solid transparent;
+    cursor: default;
+  }
+  .client-row.done { border-left-color: var(--green); }
+  .client-row.partial { border-left-color: var(--orange); }
+  .client-row.over { border-left-color: var(--red); }
+  .client-row-info { flex: 1; }
+  .client-row-name { font-size: 14px; font-weight: 600; }
+  .client-row-order { font-family: var(--mono); font-size: 11px; color: var(--text2); margin-top: 2px; }
+  .client-row-count {
+    font-family: var(--mono);
+    font-size: 14px;
+    font-weight: 700;
+  }
+  .client-row.done .client-row-count { color: var(--green); }
+  .client-row.partial .client-row-count { color: var(--orange); }
+  .client-row.over .client-row-count { color: var(--red); }
+  .two-addr-badge {
+    font-size: 10px;
+    background: rgba(255,149,0,0.15);
+    color: var(--orange);
+    border-radius: 4px;
+    padding: 1px 5px;
+    margin-left: 6px;
+  }
+
+  /* === REPORT PAGE === */
+  .warehouse-pills {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 16px;
+  }
+  .warehouse-pill {
+    padding: 5px 12px;
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text2);
+    transition: all 0.15s;
+  }
+  .warehouse-pill.active {
+    background: var(--accent);
+    color: #000;
+    border-color: var(--accent);
+  }
+
+  .report-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+    margin-top: 10px;
+  }
+  .report-table th {
+    background: var(--surface2);
+    padding: 8px 10px;
+    text-align: left;
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--text2);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+  .report-table td {
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--border);
+  }
+  .report-table tr:last-child td { border-bottom: none; }
+  .status-pill {
+    font-size: 10px;
+    padding: 2px 7px;
+    border-radius: 10px;
+    font-weight: 600;
+  }
+  .status-ok { background: rgba(0,212,170,0.15); color: var(--green); }
+  .status-under { background: rgba(255,149,0,0.15); color: var(--orange); }
+  .status-over { background: rgba(255,77,77,0.15); color: var(--red); }
+  .status-manual { background: rgba(0,153,255,0.15); color: var(--blue); }
+  .status-unreg { background: rgba(255,77,77,0.1); color: var(--red); }
+
+  /* === SETTINGS PAGE === */
+  .two-addr-list { margin-top: 8px; }
+  .two-addr-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 10px;
+    background: var(--surface2);
+    border-radius: 6px;
+    margin-bottom: 6px;
+    font-size: 13px;
+  }
+  .two-addr-item button {
+    background: none;
+    border: none;
+    color: var(--red);
+    cursor: pointer;
+    font-size: 16px;
+    line-height: 1;
+    padding: 2px 6px;
+  }
+  .column-map-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    margin-bottom: 8px;
+  }
+  .column-map-row label { font-size: 12px; color: var(--text2); width: 100px; flex-shrink: 0; }
+  .column-map-row input {
+    flex: 1;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 6px 10px;
+    border-radius: 6px;
+    font-family: var(--mono);
+    font-size: 12px;
+  }
+  .column-map-row input:focus { outline: none; border-color: var(--accent); }
+
+  .warehouses-list .wh-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 10px;
+    background: var(--surface2);
+    border-radius: 6px;
+    margin-bottom: 6px;
+    font-size: 13px;
+  }
+  .wh-item-left { display: flex; align-items: center; gap: 8px; }
+  .wh-item-name { font-weight: 600; }
+  .wh-item-type { font-size: 10px; color: var(--text2); }
+  .wh-item-actions { display: flex; gap: 4px; }
+  .wh-item-actions button {
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--text2);
+    cursor: pointer;
+    font-size: 11px;
+    padding: 3px 8px;
+    border-radius: 4px;
+  }
+  .wh-item-actions button:hover { border-color: var(--red); color: var(--red); }
+
+  /* Manual entry modal */
+  .modal-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.7);
+    z-index: 200;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+  }
+  .modal-overlay.show { display: flex; }
+  .modal {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 20px;
+    width: 100%;
+    max-width: 340px;
+  }
+  .modal-title { font-size: 16px; font-weight: 700; margin-bottom: 4px; }
+  .modal-sub { font-size: 12px; color: var(--text2); margin-bottom: 16px; }
+  .modal input {
+    width: 100%;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 10px 12px;
+    border-radius: 8px;
+    font-family: var(--sans);
+    font-size: 14px;
+    margin-bottom: 10px;
+  }
+  .modal input:focus { outline: none; border-color: var(--accent); }
+  .modal-btns { display: flex; gap: 8px; }
+  .modal-btns .btn { flex: 1; }
+
+  /* Toast */
+  .toast {
+    position: fixed;
+    bottom: 20px;
+    left: 50%;
+    transform: translateX(-50%) translateY(80px);
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 10px 18px;
+    border-radius: 100px;
+    font-size: 13px;
+    font-weight: 600;
+    z-index: 300;
+    transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+    white-space: nowrap;
+  }
+  .toast.show { transform: translateX(-50%) translateY(0); }
+
+  /* PDF hidden styles */
+  #pdf-report { display: none; }
+</style>
+</head>
+<body>
+
+<!-- NAV -->
+<nav class="nav">
+  <div class="nav-logo">▣ СКЛАД</div>
+  <div class="nav-tabs">
+    <button class="nav-tab active" onclick="showPage('import')">Імпорт</button>
+    <button class="nav-tab" onclick="showPage('scan')">Сканер</button>
+    <button class="nav-tab" onclick="showPage('clients')">Клієнти</button>
+    <button class="nav-tab" onclick="showPage('report')">Звіт</button>
+    <button class="nav-tab" onclick="showPage('settings')">⚙</button>
+  </div>
+</nav>
+
+<!-- ======================== IMPORT PAGE ======================== -->
+<div id="page-import" class="page active">
+<div class="container">
+
+  <p class="section-title">Поточна сесія</p>
+  <div class="card">
+    <div class="stats-grid">
+      <div class="stat-box">
+        <div class="stat-val" id="stat-orders">0</div>
+        <div class="stat-lbl">Замовлень</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-val" id="stat-places">0</div>
+        <div class="stat-lbl">Очік. місць</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-val" id="stat-scanned">0</div>
+        <div class="stat-lbl">Відскановано</div>
+      </div>
+    </div>
+  </div>
+
+  <p class="section-title" style="margin-top:16px">Імпорт CSV</p>
+  <div class="card">
+    <div class="warehouse-select">
+      <label>Склад для файлу:</label>
+      <select id="import-warehouse">
+        <option value="">— оберіть склад —</option>
+      </select>
+    </div>
+    <div class="drop-zone" id="drop-zone" style="margin-top:12px" ondragover="onDragOver(event)" ondrop="onDrop(event)" ondragleave="onDragLeave(event)">
+      <input type="file" id="csv-input" accept=".xlsx,.xls,.csv" multiple onchange="handleFiles(this.files)">
+      <div class="drop-icon">📂</div>
+      <div class="drop-text"><strong>Оберіть файли</strong> або перетягніть сюди</div>
+      <div style="font-size:11px;color:var(--text2);margin-top:4px">Excel (.xlsx) та CSV</div>
+    </div>
+    <div class="imported-list" id="imported-list"></div>
+  </div>
+
+  <div style="display:flex;gap:8px">
+    <button class="btn btn-danger btn-full" onclick="clearSession()">🗑 Очистити сесію</button>
+    <button class="btn btn-secondary btn-full" onclick="showPage('scan')">→ До сканера</button>
+  </div>
+
+</div>
+</div>
+
+<!-- ======================== SCAN PAGE ======================== -->
+<div id="page-scan" class="page">
+<div class="container">
+
+  <!-- Status block -->
+  <div class="status-block idle" id="status-block">
+    <div class="status-indicator">
+      <div class="status-dot"></div>
+      <div class="status-label" id="status-label">Очікування сканування</div>
+    </div>
+    <div class="client-name" id="client-name" style="text-transform:uppercase;letter-spacing:0.03em">—</div>
+    <div class="order-num" id="order-num" style="font-size:13px;margin-top:2px;margin-bottom:8px"></div>
+    <div class="count-row" id="count-row" style="display:none">
+      <div class="count-box">
+        <div class="count-num" id="count-fact">0</div>
+        <div class="count-lbl">ФАКТ</div>
+      </div>
+      <div class="count-sep">/</div>
+      <div class="count-box">
+        <div class="count-num" id="count-exp">?</div>
+        <div class="count-lbl">EXPECTED</div>
+      </div>
+      <div class="count-box" id="place-box" style="display:none">
+        <div class="count-num" id="place-xy"></div>
+        <div class="count-lbl">МІСЦЕ</div>
+      </div>
+    </div>
+    <div class="warning-banner" id="warning-banner">
+      <span>⚠️</span>
+      <span>Клієнт має 2 адреси. Перевір бірку!</span>
+    </div>
+  </div>
+
+  <!-- Camera buttons — ABOVE camera so always visible -->
+  <div class="cam-btns">
+    <button class="btn btn-primary" id="btn-start" onclick="startCamera()" style="flex:2">▶ Запустити</button>
+    <button class="btn btn-secondary" id="btn-stop" onclick="stopCamera()" style="flex:1;display:none">⏹ Стоп</button>
+    <button class="btn btn-secondary" onclick="flipCamera()" id="btn-flip" title="Змінити камеру" style="display:none">🔄</button>
+  </div>
+
+  <!-- Camera -->
+  <div class="camera-wrap" id="camera-wrap">
+    <video id="qrVideo" autoplay playsinline muted></video>
+    <canvas id="qrCanvas" style="display:none"></canvas>
+    <div class="camera-overlay" id="camera-overlay">
+      <div class="camera-placeholder" id="cam-placeholder">
+        <div class="cam-icon">📷</div>
+        <div>Наведи камеру на QR-код</div>
+      </div>
+      <div class="scan-frame" id="scan-frame" style="display:none"><span></span><div class="scan-line"></div></div>
+    </div>
+  </div>
+
+  <!-- Manual input -->
+  <div class="manual-row">
+    <input type="text" id="manual-qr" placeholder="QR або останні 4 цифри..." autocomplete="off" oninput="onManualInput(this.value)">
+    <button class="btn btn-secondary" onclick="manualScan()">✓</button>
+  </div>
+  <!-- Search results dropdown -->
+  <div id="search-results" style="display:none;background:var(--surface);border:1px solid var(--border);border-radius:8px;margin-top:-8px;margin-bottom:12px;overflow:hidden"></div>
+
+  <!-- Recent scans -->
+  <p class="section-title">Останні сканування</p>
+  <div id="recent-scans"></div>
+
+</div>
+</div>
+
+<!-- ======================== CLIENTS PAGE ======================== -->
+<div id="page-clients" class="page">
+<div class="container">
+  <div class="filter-row">
+    <input type="text" id="client-search" placeholder="Пошук клієнта..." oninput="renderClients()">
+    <select id="client-wh-filter" onchange="renderClients()" style="background:var(--surface);border:1px solid var(--border);color:var(--text);padding:8px 10px;border-radius:8px;font-size:13px;">
+      <option value="">Всі</option>
+    </select>
+  </div>
+  <div id="clients-list"></div>
+</div>
+</div>
+
+<!-- ======================== REPORT PAGE ======================== -->
+<div id="page-report" class="page">
+<div class="container">
+
+  <p class="section-title">Склад для звіту</p>
+  <div class="warehouse-pills" id="report-wh-pills"></div>
+
+  <div class="card">
+    <div class="stats-grid" id="report-stats"></div>
+  </div>
+
+  <div style="display:flex;gap:8px;margin:12px 0">
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-primary btn-full" onclick="exportXLSX()">📊 Експорт Excel</button>
+      <button class="btn btn-secondary btn-full" onclick="printReport()">🖨 Друк</button>
+    </div>
+  </div>
+
+  <div style="overflow-x:auto">
+    <table class="report-table" id="report-table">
+      <thead>
+        <tr>
+          <th>Клієнт</th>
+          <th>№ замовлення</th>
+          <th>Exp</th>
+          <th>Fact</th>
+          <th>Статус</th>
+          <th>Примітка</th>
+        </tr>
+      </thead>
+      <tbody id="report-tbody"></tbody>
+    </table>
+  </div>
+
+</div>
+</div>
+
+<!-- ======================== SETTINGS PAGE ======================== -->
+<div id="page-settings" class="page">
+<div class="container">
+
+  <p class="section-title">Склади</p>
+  <div class="card">
+    <div class="warehouses-list" id="warehouses-list"></div>
+    <div style="display:flex;gap:8px;margin-top:10px">
+      <input type="text" id="new-wh-name" placeholder="Назва складу" style="flex:1;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:8px 10px;border-radius:8px;font-size:13px;">
+      <select id="new-wh-type" style="background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:8px 10px;border-radius:8px;font-size:13px;">
+        <option value="normal">Звичайний</option>
+        <option value="center">Центр (без expected)</option>
+      </select>
+      <button class="btn btn-primary" onclick="addWarehouse()">+</button>
+    </div>
+  </div>
+
+  <p class="section-title" style="margin-top:16px">Маппінг колонок CSV</p>
+  <div class="card">
+    <p style="font-size:12px;color:var(--text2);margin-bottom:12px">Введіть можливі назви колонок через кому</p>
+    <div class="column-map-row">
+      <label>order_number</label>
+      <input type="text" id="col-order" placeholder="order_number, номер, order">
+    </div>
+    <div class="column-map-row">
+      <label>client_name</label>
+      <input type="text" id="col-client" placeholder="client_name, клієнт, name">
+    </div>
+    <div class="column-map-row">
+      <label>expected_places</label>
+      <input type="text" id="col-places" placeholder="expected_places, місця, qty">
+    </div>
+    <button class="btn btn-primary" style="margin-top:8px" onclick="saveColMap()">Зберегти</button>
+  </div>
+
+  <p class="section-title" style="margin-top:16px">Клієнти з двома адресами</p>
+  <div class="card">
+    <div class="two-addr-list" id="two-addr-list"></div>
+    <div style="display:flex;gap:8px;margin-top:10px">
+      <input type="text" id="new-two-addr" placeholder="Ім'я клієнта..." style="flex:1;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:8px 10px;border-radius:8px;font-size:13px;">
+      <button class="btn btn-primary" onclick="addTwoAddr()">+</button>
+    </div>
+  </div>
+
+  <div style="margin-top:16px">
+    <button class="btn btn-danger btn-full" onclick="clearSession()">🗑 Очистити сесію</button>
+  </div>
+</div>
+</div>
+
+<!-- MANUAL CLIENT MODAL -->
+<div class="modal-overlay" id="modal-manual">
+  <div class="modal">
+    <div class="modal-title">⚠️ Замовлення не знайдено</div>
+    <div class="modal-sub" id="modal-order-num"></div>
+    <input type="text" id="modal-client-input" placeholder="Введіть ім'я клієнта...">
+    <div class="modal-btns">
+      <button class="btn btn-secondary" onclick="closeModal()">Скасувати</button>
+      <button class="btn btn-primary" onclick="confirmManualClient()">Додати</button>
+    </div>
+  </div>
+</div>
+
+<!-- TOAST -->
+<div class="toast" id="toast"></div>
+
+<script>
+// ======================== STATE ========================
+const LS = {
+  get: k => { try { return JSON.parse(localStorage.getItem(k)); } catch { return null; } },
+  set: (k,v) => localStorage.setItem(k, JSON.stringify(v)),
+  del: k => localStorage.removeItem(k)
+};
+
+let state = {
+  registry: {}, // { warehouse: [ {order_number, client_name, expected_places} ] }
+  scans: [],    // [ {order_number, client_name, warehouse, fact, place, total, manual, timestamp} ]
+  warehouses: [],
+  twoAddr: [],
+  colMap: { order: ['order_number','номер замовлення','order','замовлення'], client: ['client_name','клієнт','client','name','ім\'я'], places: ['expected_places','місця','qty','кількість','places'] },
+};
+
+function loadState() {
+  state.registry = LS.get('registry') || {};
+  state.scans = LS.get('scans') || [];
+  state.warehouses = LS.get('warehouses') || [
+    { id:'kyiv1', name:'Київ1', type:'normal' },
+    { id:'center', name:'Центр', type:'center' },
+    { id:'lviv1', name:'Львів1', type:'normal' },
+    { id:'lviv2', name:'Львів2', type:'normal' },
+    { id:'rivne', name:'Рівне', type:'normal' },
+    { id:'mukachevo', name:'Мукачево', type:'normal' },
+  ];
+  state.twoAddr = LS.get('twoAddr') || [];
+  const savedColMap = LS.get('colMap');
+  if (savedColMap) state.colMap = savedColMap;
+}
+
+function saveState() {
+  LS.set('registry', state.registry);
+  LS.set('scans', state.scans);
+  LS.set('warehouses', state.warehouses);
+  LS.set('twoAddr', state.twoAddr);
+  LS.set('colMap', state.colMap);
+}
+
+// ======================== PAGE NAV ========================
+function showPage(id) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
+  document.getElementById('page-' + id).classList.add('active');
+  const tabs = document.querySelectorAll('.nav-tab');
+  const pages = ['import','scan','clients','report','settings'];
+  const idx = pages.indexOf(id);
+  if (idx >= 0) tabs[idx].classList.add('active');
+
+  if (id === 'import') { updateImportStats(); renderImportedList(); populateWarehouseSelects(); }
+  if (id === 'clients') renderClients();
+  if (id === 'report') renderReport();
+  if (id === 'settings') renderSettings();
+}
+
+// ======================== FILE IMPORT ========================
+function onDragOver(e) { e.preventDefault(); document.getElementById('drop-zone').classList.add('dragover'); }
+function onDragLeave(e) { document.getElementById('drop-zone').classList.remove('dragover'); }
+function onDrop(e) {
+  e.preventDefault();
+  document.getElementById('drop-zone').classList.remove('dragover');
+  handleFiles(e.dataTransfer.files);
+}
+
+function handleFiles(files) {
+  const wh = document.getElementById('import-warehouse').value;
+  if (!wh) { toast('⚠️ Оберіть склад перед імпортом'); return; }
+  Array.from(files).forEach(f => {
+    const n = f.name.toLowerCase();
+    if (n.endsWith('.xlsx') || n.endsWith('.xls')) importExcel(f, wh);
+    else if (n.endsWith('.csv')) { const r = new FileReader(); r.onload = e => importCSVBuffer(e.target.result, wh, f.name); r.readAsArrayBuffer(f); }
+    else toast('⚠️ Непідтримуваний формат: ' + f.name);
+  });
+  document.getElementById('csv-input').value = '';
+}
+
+// ---- EXCEL import ----
+function importExcel(file, whId) {
+  const reader = new FileReader();
+  reader.onload = e => {
+    try {
+      const wb = XLSX.read(e.target.result, { type: 'array' });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+
+      // Auto-detect warehouse from cell [7][12] (row 8, col 13 in Excel)
+      let detectedWh = whId;
+      const whCell = rows[7] ? String(rows[7][12] || '').trim().toUpperCase() : '';
+      if (whCell) {
+        const found = state.warehouses.find(w => whCell.includes(w.name.toUpperCase()) || w.name.toUpperCase().includes(whCell));
+        if (found) detectedWh = found.id;
+      }
+
+      let colOrder = -1, colClient = -1, colPlaces = -1, startIdx = -1;
+
+      // Strategy 1: named header row
+      for (let i = 0; i < Math.min(rows.length, 25); i++) {
+        const row = rows[i];
+        for (let j = 0; j < row.length; j++) {
+          const v = String(row[j] || '').trim();
+          if (/заказ.продажи|order.numb|замовлення/i.test(v)) colOrder = j;
+          if (/клиент.назван|client.name|клієнт.назв/i.test(v)) colClient = j;
+          if (/кол.?во.?мест|expected.?place|кількість/i.test(v)) colPlaces = j;
+        }
+        if (colOrder >= 0 && colClient >= 0) { startIdx = i + 1; break; }
+      }
+
+      // Strategy 2: find first data row with S\d{10}
+      if (startIdx < 0) {
+        for (let i = 0; i < Math.min(rows.length, 30); i++) {
+          const row = rows[i];
+          for (let j = 0; j < row.length; j++) {
+            if (/^S\d{10}$/i.test(String(row[j] || '').trim())) {
+              colOrder = j; startIdx = i;
+              let mx = 0;
+              for (let k = j + 1; k < Math.min(row.length, j + 12); k++) {
+                const v = String(row[k] || '').trim();
+                if (v.length > mx && v.length > 2 && !/^\d/.test(v)) { mx = v.length; colClient = k; }
+              }
+              if (colClient < 0) colClient = j + 5;
+              for (let k = colClient + 1; k < row.length; k++) {
+                const n = parseFloat(String(row[k] || '').replace(',', '.'));
+                if (!isNaN(n) && n >= 1 && n <= 999 && Number.isInteger(n)) { colPlaces = k; break; }
+              }
+              break;
+            }
+          }
+          if (startIdx >= 0) break;
+        }
+      }
+
+      if (startIdx < 0) { toast('❌ Не вдалось розпізнати структуру: ' + file.name); return; }
+
+      const records = [];
+      for (let i = startIdx; i < rows.length; i++) {
+        const row = rows[i];
+        const orderNum = extractOrderNum(String(row[colOrder] || '').trim());
+        if (!orderNum) continue;
+        const client = String(row[colClient] || '').trim() || 'Невідомо';
+        const pv = parseFloat(String(row[colPlaces] || '1').replace(',', '.'));
+        const expected = (Number.isInteger(pv) && pv > 0) ? pv : 1;
+        records.push({ order_number: orderNum, client_name: client, expected_places: expected });
+      }
+      applyRecords(records, detectedWh, file.name);
+    } catch (err) { toast('❌ Помилка Excel: ' + err.message); console.error(err); }
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+// ---- CP1251 decoder ----
+const CP1251 = [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,111,112,113,114,115,116,117,118,119,120,121,122,123,124,125,126,127,1026,1027,8218,1107,8222,8230,8224,8225,8364,8240,1033,8249,1034,1036,1035,1039,1106,8216,8217,8220,8221,8226,8211,8212,8250,8482,1113,8250,1114,1116,1115,1119,160,1038,1118,1032,164,1168,166,167,1025,169,1028,171,172,173,174,1031,176,177,1030,1110,1169,181,182,183,1105,8470,1108,187,1112,1029,1109,1111,1040,1041,1042,1043,1044,1045,1046,1047,1048,1049,1050,1051,1052,1053,1054,1055,1056,1057,1058,1059,1060,1061,1062,1063,1064,1065,1066,1067,1068,1069,1070,1071,1072,1073,1074,1075,1076,1077,1078,1079,1080,1081,1082,1083,1084,1085,1086,1087,1088,1089,1090,1091,1092,1093,1094,1095,1096,1097,1098,1099,1100,1101,1102,1103];
+function decodeCp1251(buf) { const b = new Uint8Array(buf); let s = ''; for (let i = 0; i < b.length; i++) s += String.fromCodePoint(CP1251[b[i]] || b[i]); return s; }
+
+// ---- CSV import ----
+function importCSVBuffer(buffer, whId, filename) {
+  let text;
+  try { text = new TextDecoder('utf-8', { fatal: true }).decode(buffer); }
+  catch (e) { text = decodeCp1251(buffer); }
+
+  const lines = text.split(/\r?\n/);
+  const delim = ';';
+  let colOrder = -1, colClient = -1, colPlaces = -1, startIdx = -1;
+  const oSyn = state.colMap.order.map(s => s.toLowerCase());
+  const cSyn = state.colMap.client.map(s => s.toLowerCase());
+  const pSyn = state.colMap.places.map(s => s.toLowerCase());
+
+  // Strategy 1: named headers
+  for (let i = 0; i < Math.min(lines.length, 25); i++) {
+    const cells = lines[i].split(delim).map(c => c.trim().toLowerCase());
+    const oi = cells.findIndex(c => oSyn.some(s => c.includes(s)));
+    const ci = cells.findIndex(c => cSyn.some(s => c.includes(s)));
+    const pi = cells.findIndex(c => pSyn.some(s => c.includes(s)));
+    if (oi >= 0 && ci >= 0) { colOrder = oi; colClient = ci; colPlaces = pi; startIdx = i + 1; break; }
+  }
+
+  // Strategy 2: find S\d{10}
+  if (startIdx < 0) {
+    for (let i = 0; i < Math.min(lines.length, 30); i++) {
+      const cells = lines[i].split(delim);
+      const oi = cells.findIndex(c => /^S\d{10}$/i.test(c.trim()));
+      if (oi >= 0) {
+        colOrder = oi; let mx = 0;
+        for (let k = oi + 1; k < Math.min(cells.length, oi + 12); k++) {
+          const v = cells[k].trim();
+          if (v.length > mx && v.length > 2 && !/^\d/.test(v)) { mx = v.length; colClient = k; }
+        }
+        if (colClient < 0) colClient = oi + 5;
+        for (let k = colClient + 1; k < cells.length; k++) {
+          const n = parseFloat(cells[k].trim().replace(',', '.'));
+          if (!isNaN(n) && n >= 1 && n <= 999 && Number.isInteger(n)) { colPlaces = k; break; }
+        }
+        startIdx = i; break;
+      }
+    }
+  }
+
+  if (startIdx < 0) { toast('❌ Не вдалось розпізнати: ' + filename); return; }
+
+  const records = [];
+  for (let i = startIdx; i < lines.length; i++) {
+    const cells = lines[i].split(delim);
+    const orderNum = extractOrderNum((cells[colOrder] || '').trim());
+    if (!orderNum) continue;
+    const client = (cells[colClient] || '').trim() || 'Невідомо';
+    const pv = parseFloat((cells[colPlaces] || '1').trim().replace(',', '.'));
+    const expected = (!isNaN(pv) && Number.isInteger(pv) && pv > 0) ? pv : 1;
+    records.push({ order_number: orderNum, client_name: client, expected_places: expected });
+  }
+  applyRecords(records, whId, filename);
+}
+
+function extractOrderNum(raw) { const m = String(raw || '').match(/S\d{10}/i); return m ? m[0].toUpperCase() : null; }
+
+function applyRecords(records, whId, filename) {
+  if (!records.length) { toast('⚠️ Не знайдено записів: ' + filename); return; }
+  if (!state.registry[whId]) state.registry[whId] = [];
+  const existing = new Set(state.registry[whId].map(r => r.order_number));
+  let added = 0;
+  records.forEach(r => { if (!existing.has(r.order_number)) { state.registry[whId].push(r); added++; } });
+  saveState(); updateImportStats(); renderImportedList();
+  toast(`✅ ${filename}: ${added} записів → ${getWhName(whId)}`);
+}
+
+function updateImportStats() {
+  let totalOrders = 0, totalPlaces = 0;
+  Object.values(state.registry).forEach(rows => {
+    totalOrders += rows.length;
+    rows.forEach(r => totalPlaces += r.expected_places || 0);
+  });
+  document.getElementById('stat-orders').textContent = totalOrders;
+  document.getElementById('stat-places').textContent = totalPlaces;
+  document.getElementById('stat-scanned').textContent = state.scans.length;
+}
+
+function renderImportedList() {
+  const el = document.getElementById('imported-list');
+  const entries = Object.entries(state.registry);
+  if (!entries.length) { el.innerHTML = ''; return; }
+  el.innerHTML = entries.map(([wh, rows]) => `
+    <div class="imported-item">
+      <span>${getWhName(wh)}</span>
+      <span class="badge">${rows.length} замовлень</span>
+    </div>
+  `).join('');
+}
+
+function getWhName(id) {
+  const w = state.warehouses.find(w => w.id === id);
+  return w ? w.name : id;
+}
+
+function populateWarehouseSelects() {
+  const opts = state.warehouses.map(w => `<option value="${w.id}">${w.name}</option>`).join('');
+  document.getElementById('import-warehouse').innerHTML = '<option value="">— оберіть склад —</option>' + opts;
+
+  const clientWh = document.getElementById('client-wh-filter');
+  clientWh.innerHTML = '<option value="">Всі</option>' + opts;
+}
+
+// ======================== QR PARSING ========================
+function parseQR(raw) {
+  // Extract order: S followed by 10 digits
+  const orderMatch = raw.match(/S(\d{10,})/i);
+  if (!orderMatch) return null;
+  const order_number = 'S' + orderMatch[1];
+
+  // Extract X/Y
+  const xyMatch = raw.match(/(\d+)\/(\d+)/);
+  let place = null, total = null;
+  if (xyMatch) {
+    place = parseInt(xyMatch[1]);
+    total = parseInt(xyMatch[2]);
+  }
+  return { order_number, place, total };
+}
+
+// ======================== SCAN LOGIC ========================
+function findInRegistry(order_number) {
+  for (const [wh, rows] of Object.entries(state.registry)) {
+    const row = rows.find(r => r.order_number === order_number);
+    if (row) return { ...row, warehouse: wh };
+  }
+  return null;
+}
+
+function getScanCount(order_number) {
+  return state.scans.filter(s => s.order_number === order_number).length;
+}
+
+let pendingQR = null;
+
+function processScan(raw) {
+  const parsed = parseQR(raw);
+  if (!parsed) { toast('❌ Не вдалось розпізнати QR'); return; }
+
+  const { order_number, place, total } = parsed;
+
+  // Duplicate check
+  if (place && total > 0) {
+    const dupKey = order_number + '_' + place;
+    if (state.scans.find(s => s.order_number === order_number && s.place === place)) {
+      showStatus('red', '⛔ Дубль', order_number, null, null, place, total);
+      toast('⛔ Це місце вже відскановано!');
+      beep('error');
+      return;
+    }
+  }
+
+  const reg = findInRegistry(order_number);
+  if (!reg) {
+    // Unknown order
+    pendingQR = { order_number, place, total };
+    document.getElementById('modal-order-num').textContent = `QR: ${raw}`;
+    document.getElementById('modal-client-input').value = '';
+    document.getElementById('modal-manual').classList.add('show');
+    showStatus('red', '❌ Не в реєстрі', order_number, null, null, place, total);
+    beep('error');
+    return;
+  }
+
+  // Determine expected
+  let expected = reg.expected_places;
+  const wh = state.warehouses.find(w => w.id === reg.warehouse);
+  if (wh && wh.type === 'center') {
+    expected = (total && total > 0) ? total : null;
+  } else if ((!expected || expected === 0) && total && total > 0) {
+    expected = total;
+  }
+
+  const fact = getScanCount(order_number) + 1;
+
+  // Check overcount
+  if (expected && fact > expected) {
+    showStatus('red', '⚠️ Перевищення!', reg.client_name, order_number, fact, place, total, expected);
+    beep('error');
+    toast(`⚠️ Очікується ${expected}, вже ${fact}`);
+    // Still record it
+    recordScan(order_number, reg.client_name, reg.warehouse, place, total, false, expected);
+    return;
+  }
+
+  // Success
+  // Check if this client already has ANY scans (across all orders)
+  const clientName = reg.client_name.toLowerCase().trim();
+  const clientAlreadyHasScans = state.scans.some(s => s.client_name.toLowerCase().trim() === clientName);
+  const isFirstForClient = !clientAlreadyHasScans;
+  const isFirstForOrder = fact === 1;
+
+  let color, label;
+  if (isFirstForClient) {
+    color = 'green';
+    label = '🟢 Перше місце';
+  } else {
+    color = 'blue';
+    label = '🔵 +1 місце';
+  }
+  showStatus(color, label, reg.client_name, order_number, fact, place, total, expected);
+  beep(isFirstForClient ? 'success' : 'info');
+  recordScan(order_number, reg.client_name, reg.warehouse, place, total, false, expected);
+
+  // Two-address warning
+  if (state.twoAddr.some(n => reg.client_name.toLowerCase().includes(n.toLowerCase()))) {
+    document.getElementById('warning-banner').classList.add('show');
+    beep('warn');
+  } else {
+    document.getElementById('warning-banner').classList.remove('show');
+  }
+}
+
+function recordScan(order_number, client_name, warehouse, place, total, manual, expected) {
+  state.scans.push({ order_number, client_name, warehouse, place, total, manual, expected, timestamp: Date.now() });
+  saveState();
+  document.getElementById('stat-scanned').textContent = state.scans.length;
+  renderRecentScans();
+}
+
+function showStatus(color, label, clientName, orderNum, fact, place, total, expected) {
+  const block = document.getElementById('status-block');
+  block.className = 'status-block ' + color;
+  document.getElementById('status-label').textContent = label;
+  document.getElementById('client-name').textContent = clientName || '—';
+  document.getElementById('order-num').textContent = orderNum || '';
+
+  const countRow = document.getElementById('count-row');
+  if (fact !== null) {
+    countRow.style.display = 'flex';
+    document.getElementById('count-fact').textContent = fact;
+    document.getElementById('count-exp').textContent = expected || '?';
+    const placeBox = document.getElementById('place-box');
+    if (place && total) {
+      placeBox.style.display = 'block';
+      document.getElementById('place-xy').textContent = place + '/' + total;
+    } else {
+      placeBox.style.display = 'none';
+    }
+  } else {
+    countRow.style.display = 'none';
+  }
+}
+
+function renderRecentScans() {
+  const el = document.getElementById('recent-scans');
+  const recent = [...state.scans].reverse().slice(0, 8);
+  el.innerHTML = recent.map(s => {
+    const fact = state.scans.filter(x => x.order_number === s.order_number).length;
+    const color = s.manual ? 'blue' : 'green';
+    return `<div class="scan-item ${color}">
+      <span class="scan-item-icon">${s.manual ? '✏️' : '📦'}</span>
+      <div style="flex:1">
+        <div class="scan-item-name">${s.client_name || '—'}</div>
+        <div class="scan-item-order">${s.order_number}</div>
+      </div>
+      <div class="scan-item-count">${s.place ? s.place+'/'+(s.total||'?') : fact}</div>
+    </div>`;
+  }).join('') || '<div style="color:var(--text2);font-size:13px;text-align:center;padding:16px">Ще немає сканувань</div>';
+}
+
+// ======================== CAMERA ========================
+let stream = null, scanTimer = null, cameraFacing = 'environment';
+
+async function startCamera() {
+  // jsQR може ще завантажуватись — почекаємо до 5 секунд
+  let waited = 0;
+  while (typeof jsQR === 'undefined' && waited < 5000) {
+    await new Promise(r => setTimeout(r, 200));
+    waited += 200;
+  }
+  if (typeof jsQR === 'undefined') {
+    toast('❌ jsQR не завантажився. Перевір інтернет і оновлення сторінку.');
+    return;
+  }
+  try {
+    if (stream) stopCamera();
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: cameraFacing }, width: { ideal: 1280 }, height: { ideal: 720 } }
+    });
+    const video = document.getElementById('qrVideo');
+    video.srcObject = stream;
+    await video.play();
+    document.getElementById('cam-placeholder').style.display = 'none';
+    document.getElementById('scan-frame').style.display = 'flex';
+    document.getElementById('btn-start').style.display = 'none';
+    document.getElementById('btn-stop').style.display = '';
+    document.getElementById('btn-flip').style.display = '';
+    // setInterval — надійніше за requestAnimationFrame на Android Chrome
+    scanTimer = setInterval(scanLoop, 200);
+  } catch(e) {
+    toast('❌ Камера недоступна: ' + e.message);
+  }
+}
+
+function stopCamera() {
+  if (scanTimer) { clearInterval(scanTimer); scanTimer = null; }
+  if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+  const video = document.getElementById('qrVideo');
+  if (video) video.srcObject = null;
+  document.getElementById('cam-placeholder').style.display = 'flex';
+  document.getElementById('scan-frame').style.display = 'none';
+  document.getElementById('btn-start').style.display = '';
+  document.getElementById('btn-stop').style.display = 'none';
+  document.getElementById('btn-flip').style.display = 'none';
+}
+
+function flipCamera() {
+  cameraFacing = cameraFacing === 'environment' ? 'user' : 'environment';
+  startCamera();
+}
+
+let lastScanned = '';
+let lastScannedTime = 0;
+
+function scanLoop() {
+  const video  = document.getElementById('qrVideo');
+  const canvas = document.getElementById('qrCanvas');
+  // Wait until jsQR library is loaded and video is ready
+  if (typeof jsQR === 'undefined') return;
+  if (!video || video.readyState < 2 || video.videoWidth === 0) return;
+  canvas.width  = video.videoWidth;
+  canvas.height = video.videoHeight;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(video, 0, 0);
+  const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  try {
+    let code = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: 'dontInvert' });
+    if (!code) code = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: 'onlyInvert' });
+    if (code && code.data) {
+      const now = Date.now();
+      if (code.data !== lastScanned || now - lastScannedTime > 3000) {
+        lastScanned = code.data;
+        lastScannedTime = now;
+        processScan(code.data);
+      }
+    }
+  } catch(e) {}
+}
+
+function manualScan() {
+  const val = document.getElementById('manual-qr').value.trim();
+  if (!val) return;
+  hideSearchResults();
+  processScan(val);
+  document.getElementById('manual-qr').value = '';
+}
+
+function hideSearchResults() {
+  document.getElementById('search-results').style.display = 'none';
+}
+
+function onManualInput(val) {
+  val = val.trim();
+  // If looks like full QR — no search needed
+  if (/S\d{6,}/i.test(val)) { hideSearchResults(); return; }
+  // Search after 4+ digits
+  if (!/^\d{4,}$/.test(val)) { hideSearchResults(); return; }
+
+  // Search all registry entries ending with these digits
+  const results = [];
+  Object.entries(state.registry).forEach(([wh, rows]) => {
+    rows.forEach(r => {
+      if (r.order_number.endsWith(val)) {
+        results.push({ ...r, warehouse: wh });
+      }
+    });
+  });
+
+  const el = document.getElementById('search-results');
+  if (!results.length) {
+    el.style.display = 'block';
+    el.innerHTML = '<div style="padding:10px 12px;color:var(--text2);font-size:13px">Нічого не знайдено</div>';
+    return;
+  }
+
+  el.style.display = 'block';
+  el.innerHTML = results.map((r, i) => `
+    <div onclick="selectSearchResult('${r.order_number}')"
+         style="padding:10px 12px;cursor:pointer;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px;active-bg:var(--surface2)"
+         onmousedown="event.preventDefault()"
+         ontouchstart="this.style.background='var(--surface2)'"
+         ontouchend="this.style.background=''">
+      <div style="flex:1">
+        <div style="font-weight:700;font-size:14px;text-transform:uppercase">${r.client_name}</div>
+        <div style="font-family:var(--mono);font-size:11px;color:var(--text2);margin-top:2px">${r.order_number} · ${getWhName(r.warehouse)}</div>
+      </div>
+      <div style="font-family:var(--mono);font-size:12px;color:var(--accent)">→</div>
+    </div>
+  `).join('');
+}
+
+function selectSearchResult(order_number) {
+  hideSearchResults();
+  document.getElementById('manual-qr').value = '';
+  processScan(order_number);
+}
+
+document.getElementById('manual-qr').addEventListener('keydown', e => { if (e.key === 'Enter') manualScan(); });
+document.getElementById('manual-qr').addEventListener('blur', () => { setTimeout(hideSearchResults, 150); });
+
+// ======================== MODAL ========================
+function closeModal() { document.getElementById('modal-manual').classList.remove('show'); pendingQR = null; }
+
+function confirmManualClient() {
+  const name = document.getElementById('modal-client-input').value.trim();
+  if (!name || !pendingQR) return;
+  const { order_number, place, total } = pendingQR;
+  const fact = getScanCount(order_number) + 1;
+  showStatus('blue', '✏️ Додано вручну', name, order_number, fact, place, total, null);
+  recordScan(order_number, name, 'manual', place, total, true, null);
+  closeModal();
+}
+
+// ======================== CLIENTS PAGE ========================
+function renderClients() {
+  const search = (document.getElementById('client-search').value || '').toLowerCase();
+  const whFilter = document.getElementById('client-wh-filter').value;
+
+  // Build merged client list
+  const map = {};
+  Object.entries(state.registry).forEach(([wh, rows]) => {
+    if (whFilter && wh !== whFilter) return;
+    rows.forEach(r => {
+      if (!map[r.order_number]) map[r.order_number] = { ...r, warehouse: wh, fact: 0 };
+    });
+  });
+  state.scans.forEach(s => {
+    if (!map[s.order_number]) {
+      map[s.order_number] = { order_number: s.order_number, client_name: s.client_name, expected_places: s.expected, warehouse: s.warehouse, fact: 0 };
+    }
+    map[s.order_number].fact++;
+  });
+
+  const clients = Object.values(map).filter(c =>
+    c.client_name.toLowerCase().includes(search) || c.order_number.toLowerCase().includes(search)
+  );
+
+  clients.sort((a,b) => a.client_name.localeCompare(b.client_name, 'uk'));
+
+  const el = document.getElementById('clients-list');
+  if (!clients.length) { el.innerHTML = '<div style="color:var(--text2);font-size:13px;text-align:center;padding:20px">Немає даних</div>'; return; }
+
+  el.innerHTML = clients.map(c => {
+    const exp = c.expected_places || 0;
+    const fact = c.fact;
+    let cls = '';
+    if (exp > 0 && fact >= exp) cls = 'done';
+    else if (fact > 0) cls = 'partial';
+    if (exp > 0 && fact > exp) cls = 'over';
+
+    const twoAddr = state.twoAddr.some(n => c.client_name.toLowerCase().includes(n.toLowerCase()));
+
+    return `<div class="client-row ${cls}">
+      <div class="client-row-info">
+        <div class="client-row-name">${c.client_name}${twoAddr ? '<span class="two-addr-badge">2 адр.</span>' : ''}</div>
+        <div class="client-row-order">${c.order_number} · ${getWhName(c.warehouse)}</div>
+      </div>
+      <div class="client-row-count">${fact}/${exp || '?'}</div>
+    </div>`;
+  }).join('');
+}
+
+// ======================== REPORT PAGE ========================
+let selectedReportWh = '';
+
+function renderReport() {
+  const pills = document.getElementById('report-wh-pills');
+  const allWhs = Object.keys(state.registry);
+  if (!selectedReportWh && allWhs.length) selectedReportWh = allWhs[0];
+
+  pills.innerHTML = allWhs.map(wh => `
+    <div class="warehouse-pill ${wh === selectedReportWh ? 'active' : ''}" onclick="selectReportWh('${wh}')">${getWhName(wh)}</div>
+  `).join('') || '<div style="color:var(--text2);font-size:13px">Немає імпортованих даних</div>';
+
+  renderReportTable();
+}
+
+function selectReportWh(wh) {
+  selectedReportWh = wh;
+  renderReport();
+}
+
+function renderReportTable() {
+  const rows = state.registry[selectedReportWh] || [];
+  const scans = state.scans.filter(s => s.warehouse === selectedReportWh);
+  const scanMap = {};
+  scans.forEach(s => {
+    if (!scanMap[s.order_number]) scanMap[s.order_number] = { fact: 0, client_name: s.client_name, manual: s.manual };
+    scanMap[s.order_number].fact++;
+  });
+
+  // Also add manual entries not in registry
+  state.scans.filter(s => s.warehouse === 'manual' || s.warehouse === selectedReportWh).forEach(s => {
+    if (!rows.find(r => r.order_number === s.order_number) && s.manual) {
+      if (!scanMap[s.order_number]) scanMap[s.order_number] = { fact: 0, client_name: s.client_name, manual: true };
+      scanMap[s.order_number].fact++;
+    }
+  });
+
+  let totalExp = 0, totalFact = 0;
+  const allOrders = new Set([...rows.map(r => r.order_number), ...Object.keys(scanMap)]);
+  const tbody = document.getElementById('report-tbody');
+
+  const tableRows = [];
+  allOrders.forEach(ord => {
+    const reg = rows.find(r => r.order_number === ord);
+    const scan = scanMap[ord] || { fact: 0 };
+    const exp = reg ? (reg.expected_places || 0) : 0;
+    const fact = scan.fact;
+    totalExp += exp;
+    totalFact += fact;
+
+    const whObj = state.warehouses.find(w => w.id === selectedReportWh);
+    const isCenter = whObj && whObj.type === 'center';
+    let statusCls, statusTxt;
+    if (!reg) { statusCls = 'status-unreg'; statusTxt = 'Поза реєстром'; }
+    else if (fact === 0) { statusCls = 'status-under'; statusTxt = 'Недопоставка'; }
+    else if (!isCenter && exp > 0 && fact < exp) { statusCls = 'status-under'; statusTxt = 'Недопоставка'; }
+    else if (!isCenter && exp > 0 && fact > exp) { statusCls = 'status-over'; statusTxt = 'Надлишок'; }
+    else { statusCls = 'status-ok'; statusTxt = 'OK'; }
+
+    const notes = [];
+    const twoAddr = state.twoAddr.some(n => (reg?.client_name || scan.client_name || '').toLowerCase().includes(n.toLowerCase()));
+    if (twoAddr) notes.push('2 адреси');
+    if (scan.manual) notes.push('Вручну');
+
+    tableRows.push(`<tr>
+      <td>${reg?.client_name || scan.client_name || '—'}</td>
+      <td style="font-family:var(--mono);font-size:11px">${ord}</td>
+      <td>${exp || '—'}</td>
+      <td>${fact}</td>
+      <td><span class="status-pill ${statusCls}">${statusTxt}</span></td>
+      <td style="font-size:11px;color:var(--text2)">${notes.join(', ')}</td>
+    </tr>`);
+  });
+
+  tbody.innerHTML = tableRows.join('') || '<tr><td colspan="6" style="text-align:center;color:var(--text2);padding:16px">Немає даних</td></tr>';
+
+  document.getElementById('report-stats').innerHTML = `
+    <div class="stat-box"><div class="stat-val">${allOrders.size}</div><div class="stat-lbl">Замовлень</div></div>
+    <div class="stat-box"><div class="stat-val">${totalExp}</div><div class="stat-lbl">Expected</div></div>
+    <div class="stat-box"><div class="stat-val">${totalFact}</div><div class="stat-lbl">Fact</div></div>
+  `;
+}
+
+function exportXLSX() {
+  if (!window.xlsxReady) {
+    toast('⏳ XLSX-бібліотека завантажується, спробуй ще раз...');
+    return;
+  }
+
+  const whName = getWhName(selectedReportWh);
+  const date = new Date().toLocaleDateString('uk-UA');
+
+  // Build data rows (same logic as renderReportTable)
+  const rows = state.registry[selectedReportWh] || [];
+  const scans = state.scans.filter(s => s.warehouse === selectedReportWh);
+  const scanMap = {};
+  scans.forEach(s => {
+    if (!scanMap[s.order_number]) scanMap[s.order_number] = { fact: 0, client_name: s.client_name, manual: s.manual };
+    scanMap[s.order_number].fact++;
+  });
+  state.scans.filter(s => s.warehouse === 'manual' || s.warehouse === selectedReportWh).forEach(s => {
+    if (!rows.find(r => r.order_number === s.order_number) && s.manual) {
+      if (!scanMap[s.order_number]) scanMap[s.order_number] = { fact: 0, client_name: s.client_name, manual: true };
+      scanMap[s.order_number].fact++;
+    }
+  });
+
+  const allOrders = new Set([...rows.map(r => r.order_number), ...Object.keys(scanMap)]);
+  let totalExp = 0, totalFact = 0;
+
+  const dataRows = [];
+  allOrders.forEach(ord => {
+    const reg = rows.find(r => r.order_number === ord);
+    const scan = scanMap[ord] || { fact: 0 };
+    const exp = reg ? (reg.expected_places || 0) : 0;
+    const fact = scan.fact;
+    totalExp += exp;
+    totalFact += fact;
+
+    const whObjX = state.warehouses.find(w => w.id === selectedReportWh);
+    const isCenterX = whObjX && whObjX.type === 'center';
+    let status;
+    if (!reg) status = 'Поза реєстром';
+    else if (fact === 0) status = 'Недопоставка';
+    else if (!isCenterX && exp > 0 && fact < exp) status = 'Недопоставка';
+    else if (!isCenterX && exp > 0 && fact > exp) status = 'Надлишок';
+    else status = 'OK';
+
+    const clientName = reg?.client_name || scan.client_name || '—';
+    const notes = [];
+    if (state.twoAddr.some(n => clientName.toLowerCase().includes(n.toLowerCase()))) notes.push('2 адреси');
+    if (scan.manual) notes.push('Вручну');
+
+    dataRows.push({
+      'Клієнт': clientName,
+      '№ замовлення': ord,
+      'Очікується': exp || '',
+      'Факт': fact,
+      'Статус': status,
+      'Примітка': notes.join(', ')
+    });
+  });
+
+  // Create workbook
+  const wb = XLSX.utils.book_new();
+
+  // Info sheet header rows then data
+  const headerInfo = [
+    ['Звіт прийому товару — ' + whName],
+    ['Дата: ' + date],
+    ['Замовлень: ' + allOrders.size + '   Очікується: ' + totalExp + '   Факт: ' + totalFact],
+    []
+  ];
+  const ws = XLSX.utils.aoa_to_sheet(headerInfo);
+
+  // Append data table starting at row 5
+  XLSX.utils.sheet_add_json(ws, dataRows, { origin: 'A5' });
+
+  // Column widths
+  ws['!cols'] = [
+    { wch: 35 }, // Клієнт
+    { wch: 18 }, // № замовлення
+    { wch: 12 }, // Очікується
+    { wch: 8  }, // Факт
+    { wch: 16 }, // Статус
+    { wch: 20 }  // Примітка
+  ];
+
+  // Add borders to data rows (row 5 = table header + data rows below)
+  const borderStyle = {
+    top:    { style: 'thin', color: { rgb: 'BBBBBB' } },
+    bottom: { style: 'thin', color: { rgb: 'BBBBBB' } },
+    left:   { style: 'thin', color: { rgb: 'BBBBBB' } },
+    right:  { style: 'thin', color: { rgb: 'BBBBBB' } }
+  };
+  const cols = ['A','B','C','D','E','F'];
+  // Row 5 is table header (dataRows starts at row 6 = index 5 in 1-based)
+  // sheet_add_json writes header at row 5 (A5), data from A6
+  const totalDataRows = dataRows.length + 1; // +1 for header row of table
+  for (let r = 5; r <= 4 + totalDataRows; r++) {
+    cols.forEach(c => {
+      const cellRef = c + r;
+      if (!ws[cellRef]) ws[cellRef] = { t: 's', v: '' };
+      if (!ws[cellRef].s) ws[cellRef].s = {};
+      ws[cellRef].s.border = borderStyle;
+    });
+  }
+
+  XLSX.utils.book_append_sheet(wb, ws, whName.substring(0, 31));
+
+  // Also add a scans log sheet
+  if (state.scans.length) {
+    const scanRows = state.scans.map(s => ({
+      'Час': new Date(s.timestamp).toLocaleString('uk-UA'),
+      'Клієнт': s.client_name || '—',
+      '№ замовлення': s.order_number,
+      'Місце': s.place ? (s.place + '/' + (s.total || '?')) : '—',
+      'Склад': getWhName(s.warehouse),
+      'Вручну': s.manual ? 'Так' : ''
+    })).reverse(); // newest first
+    const wsLog = XLSX.utils.json_to_sheet(scanRows);
+    wsLog['!cols'] = [
+      { wch: 20 }, { wch: 35 }, { wch: 18 }, { wch: 10 }, { wch: 14 }, { wch: 8 }
+    ];
+    XLSX.utils.book_append_sheet(wb, wsLog, 'Лог сканувань');
+  }
+
+  // Fit to page width for printing
+  ws['!pageSetup'] = { fitToPage: true, fitToWidth: 1, fitToHeight: 0, orientation: 'landscape', paperSize: 9 };
+  ws['!margins'] = { left: 0.5, right: 0.5, top: 0.75, bottom: 0.75, header: 0.3, footer: 0.3 };
+
+  const filename = 'zvit_' + whName + '_' + date.replace(/\./g, '-') + '.xlsx';
+  XLSX.writeFile(wb, filename, { cellStyles: true });
+  toast('✅ Збережено: ' + filename);
+}
+
+function printReport() {
+  if (!window.jsPDFReady) {
+    toast('⏳ PDF-бібліотека завантажується, спробуй ще раз...');
+    return;
+  }
+
+  const whName = getWhName(selectedReportWh);
+  const date = new Date().toLocaleDateString('uk-UA');
+
+  // Collect table data
+  const rows = state.registry[selectedReportWh] || [];
+  const scans = state.scans.filter(s => s.warehouse === selectedReportWh);
+  const scanMap = {};
+  scans.forEach(s => {
+    if (!scanMap[s.order_number]) scanMap[s.order_number] = { fact: 0, client_name: s.client_name };
+    scanMap[s.order_number].fact++;
+  });
+
+  const allOrders = new Set([...rows.map(r => r.order_number), ...Object.keys(scanMap)]);
+  const tableRows = [];
+  let totalExp = 0, totalFact = 0;
+
+  allOrders.forEach(ord => {
+    const reg = rows.find(r => r.order_number === ord);
+    const scan = scanMap[ord] || { fact: 0 };
+    const exp = reg ? (reg.expected_places || 0) : 0;
+    const fact = scan.fact;
+    totalExp += exp;
+    totalFact += fact;
+
+    const whObjX = state.warehouses.find(w => w.id === selectedReportWh);
+    const isCenterX = whObjX && whObjX.type === 'center';
+    let status;
+    if (!reg) status = 'Поза реєстром';
+    else if (fact === 0) status = 'Недопоставка';
+    else if (!isCenterX && exp > 0 && fact < exp) status = 'Недопоставка';
+    else if (!isCenterX && exp > 0 && fact > exp) status = 'Надлишок';
+    else status = 'OK';
+
+    const notes = [];
+    const clientName = reg?.client_name || scan.client_name || '';
+    if (state.twoAddr.some(n => clientName.toLowerCase().includes(n.toLowerCase()))) notes.push('2 адреси');
+
+    tableRows.push([
+      clientName || '—',
+      ord,
+      exp || '—',
+      fact,
+      status,
+      notes.join(', ')
+    ]);
+  });
+
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+
+  // Title
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(14);
+  doc.text('Zvit pryiomu tovaru — ' + whName, 14, 15);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(10);
+  doc.text('Data: ' + date, 14, 22);
+  doc.text('Zamovlen: ' + allOrders.size + '   Ochikuvano: ' + totalExp + '   Fakt: ' + totalFact, 14, 28);
+
+  // Table
+  doc.autoTable({
+    head: [['Клієнт', '№ замовлення', 'Exp', 'Fact', 'Статус', 'Примітка']],
+    body: tableRows,
+    startY: 33,
+    styles: { font: 'helvetica', fontSize: 9, cellPadding: 2 },
+    headStyles: { fillColor: [40, 50, 60], textColor: 255, fontStyle: 'bold' },
+    columnStyles: {
+      0: { cellWidth: 60 },
+      1: { cellWidth: 35, font: 'courier' },
+      2: { cellWidth: 15, halign: 'center' },
+      3: { cellWidth: 15, halign: 'center' },
+      4: { cellWidth: 30 },
+      5: { cellWidth: 40 }
+    },
+    didParseCell: function(data) {
+      if (data.section === 'body' && data.column.index === 4) {
+        const v = data.cell.raw;
+        if (v === 'OK') data.cell.styles.textColor = [0, 150, 80];
+        else if (v === 'Надлишок') data.cell.styles.textColor = [200, 50, 50];
+        else if (v === 'Недопоставка') data.cell.styles.textColor = [200, 120, 0];
+        else if (v === 'Поза реєстром') data.cell.styles.textColor = [200, 50, 50];
+      }
+    }
+  });
+
+  // Signatures
+  const finalY = doc.lastAutoTable.finalY + 15;
+  if (finalY < 185) {
+    doc.setFontSize(9);
+    doc.line(14, finalY + 8, 74, finalY + 8);
+    doc.text('Pidpys pratsivnyka', 14, finalY + 12);
+    doc.line(100, finalY + 8, 160, finalY + 8);
+    doc.text('Pidpys zaviduvach', 100, finalY + 12);
+  }
+
+  const filename = 'zvit_' + whName.replace(/[^a-zA-Z0-9а-яА-ЯіІїЇ]/g, '_') + '_' + date.replace(/\./g, '-') + '.pdf';
+  doc.save(filename);
+  toast('✅ PDF збережено: ' + filename);
+}
+
+// ======================== SETTINGS ========================
+function renderSettings() {
+  // Warehouses
+  const el = document.getElementById('warehouses-list');
+  el.innerHTML = state.warehouses.map((w,i) => `
+    <div class="wh-item">
+      <div class="wh-item-left">
+        <div>
+          <div class="wh-item-name">${w.name}</div>
+          <div class="wh-item-type">${w.type === 'center' ? 'Центр (без expected)' : 'Звичайний'}</div>
+        </div>
+      </div>
+      <div class="wh-item-actions">
+        <button onclick="removeWarehouse(${i})">✕</button>
+      </div>
+    </div>
+  `).join('');
+
+  // Two-address
+  const ta = document.getElementById('two-addr-list');
+  ta.innerHTML = state.twoAddr.length ? state.twoAddr.map((n,i) => `
+    <div class="two-addr-item">
+      <span>${n}</span>
+      <button onclick="removeTwoAddr(${i})">✕</button>
+    </div>
+  `).join('') : '<div style="color:var(--text2);font-size:13px;margin-bottom:8px">Список порожній</div>';
+
+  // Col map
+  document.getElementById('col-order').value = state.colMap.order.join(', ');
+  document.getElementById('col-client').value = state.colMap.client.join(', ');
+  document.getElementById('col-places').value = state.colMap.places.join(', ');
+}
+
+function addWarehouse() {
+  const name = document.getElementById('new-wh-name').value.trim();
+  const type = document.getElementById('new-wh-type').value;
+  if (!name) return;
+  const id = name.toLowerCase().replace(/\s+/g, '_');
+  if (state.warehouses.find(w => w.id === id)) { toast('Склад вже існує'); return; }
+  state.warehouses.push({ id, name, type });
+  saveState();
+  renderSettings();
+  populateWarehouseSelects();
+  document.getElementById('new-wh-name').value = '';
+  toast('✅ Склад додано');
+}
+
+function removeWarehouse(i) {
+  if (!confirm('Видалити склад?')) return;
+  state.warehouses.splice(i, 1);
+  saveState();
+  renderSettings();
+  populateWarehouseSelects();
+}
+
+function addTwoAddr() {
+  const name = document.getElementById('new-two-addr').value.trim();
+  if (!name) return;
+  if (state.twoAddr.includes(name)) { toast('Вже є в списку'); return; }
+  state.twoAddr.push(name);
+  saveState();
+  renderSettings();
+  document.getElementById('new-two-addr').value = '';
+  toast('✅ Додано');
+}
+
+function removeTwoAddr(i) {
+  state.twoAddr.splice(i, 1);
+  saveState();
+  renderSettings();
+}
+
+function saveColMap() {
+  state.colMap = {
+    order: document.getElementById('col-order').value.split(',').map(s => s.trim()).filter(Boolean),
+    client: document.getElementById('col-client').value.split(',').map(s => s.trim()).filter(Boolean),
+    places: document.getElementById('col-places').value.split(',').map(s => s.trim()).filter(Boolean)
+  };
+  saveState();
+  toast('✅ Збережено');
+}
+
+// ======================== SESSION ========================
+function clearSession() {
+  if (!confirm('Очистити всі дані поточної сесії?')) return;
+  state.registry = {};
+  state.scans = [];
+  LS.del('registry');
+  LS.del('scans');
+  stopCamera();
+  updateImportStats();
+  renderImportedList();
+  renderRecentScans();
+  showStatus('idle', 'Очікування сканування', '—', '', null, null, null, null);
+  document.getElementById('warning-banner').classList.remove('show');
+  toast('🗑 Сесію очищено');
+}
+
+// ======================== BEEP ========================
+function beep(type) {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const o = ctx.createOscillator();
+    const g = ctx.createGain();
+    o.connect(g);
+    g.connect(ctx.destination);
+    if (type === 'success') { o.frequency.value = 880; g.gain.value = 0.3; }
+    else if (type === 'info') { o.frequency.value = 660; g.gain.value = 0.2; }
+    else if (type === 'error') { o.frequency.value = 220; g.gain.value = 0.4; }
+    else if (type === 'warn') { o.frequency.value = 550; g.gain.value = 0.2; }
+    o.start();
+    g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.3);
+    o.stop(ctx.currentTime + 0.3);
+  } catch(e) {}
+}
+
+// ======================== TOAST ========================
+function toast(msg) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.classList.add('show');
+  clearTimeout(el._t);
+  el._t = setTimeout(() => el.classList.remove('show'), 2500);
+}
+
+// ======================== INIT ========================
+loadState();
+updateImportStats();
+renderImportedList();
+renderRecentScans();
+populateWarehouseSelects();
+showStatus('idle', 'Очікування сканування', '—', '', null, null, null, null);
+</script>
+</body>
+</html>
