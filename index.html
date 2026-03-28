@@ -2099,7 +2099,8 @@ async function fetchDriveFiles(wh) {
       return;
     }
 
-    list.innerHTML = files.map(f => {
+    list.innerHTML = '';
+    files.forEach(f => {
       const date = new Date(f.modifiedTime).toLocaleDateString('uk-UA');
       const icon = (f.mimeType.includes('spreadsheet') || /\.xlsx?$/i.test(f.name)) ? '📊' : '📄';
       const el = document.createElement('div');
@@ -2109,10 +2110,10 @@ async function fetchDriveFiles(wh) {
         + '<div style="font-size:11px;color:var(--text2);margin-top:2px">' + date + '</div></div>'
         + '<div style="color:var(--accent);font-size:18px">→</div>';
       el.addEventListener('touchstart', () => el.style.background = 'var(--surface2)');
-      el.addEventListener('touchend', () => el.style.background = '');
+      el.addEventListener('touchend', () => { el.style.background = ''; });
       el.addEventListener('click', () => selectDriveFile(f.id, f.mimeType, f.name));
-      return el.outerHTML;
-    }).join('');
+      list.appendChild(el);
+    });
 
   } catch(e) {
     showDriveFallback(list, wh);
