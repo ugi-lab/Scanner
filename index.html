@@ -1983,7 +1983,7 @@ async function driveListFiles() {
     + '?q=' + encodeURIComponent('"' + GDRIVE_FOLDER_ID + '" in parents and trashed=false')
     + '&fields=files(id,name,mimeType,modifiedTime)'
     + '&orderBy=modifiedTime desc'
-    + '&key=GDRIVE_API_KEY';
+    + '&key=AIzaSyCJ-zzEk3tgRls-nv0M82730CRcYHUO9z8';
   const r = await fetch(url);
   if (!r.ok) throw new Error('HTTP ' + r.status);
   const data = await r.json();
@@ -1993,8 +1993,8 @@ async function driveListFiles() {
 async function driveDownloadFile(fileId, mimeType) {
   const isGSheet = mimeType === 'application/vnd.google-apps.spreadsheet';
   const url = isGSheet
-    ? 'https://www.googleapis.com/drive/v3/files/' + fileId + '/export?mimeType=application/vnd.openxmlformats-officedocument.spreadsheetml.sheet&key=GDRIVE_API_KEY'
-    : 'https://www.googleapis.com/drive/v3/files/' + fileId + '?alt=media&key=GDRIVE_API_KEY';
+    ? 'https://www.googleapis.com/drive/v3/files/' + fileId + '/export?mimeType=application/vnd.openxmlformats-officedocument.spreadsheetml.sheet&key=AIzaSyCJ-zzEk3tgRls-nv0M82730CRcYHUO9z8'
+    : 'https://www.googleapis.com/drive/v3/files/' + fileId + '?alt=media&key=AIzaSyCJ-zzEk3tgRls-nv0M82730CRcYHUO9z8';
   const r = await fetch(url);
   if (!r.ok) throw new Error('HTTP ' + r.status);
   return r.arrayBuffer();
@@ -2004,6 +2004,41 @@ function drivePickFile() {
   const wh = document.getElementById('import-warehouse').value;
   if (!wh) { toast('⚠️ Спочатку оберіть склад'); return; }
   showDriveModal(wh);
+}
+
+function showDrivePasteModal(wh) {
+  let modal = document.getElementById('drive-modal');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.id = 'drive-modal';
+    modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:200;display:flex;align-items:center;justify-content:center;padding:16px';
+    document.body.appendChild(modal);
+  }
+  modal.dataset.wh = wh;
+  modal.style.display = 'flex';
+  modal.innerHTML = '';
+
+  const inner = document.createElement('div');
+  inner.style.cssText = 'background:var(--surface);border:1px solid var(--border);border-radius:12px;width:100%;max-width:420px;padding:20px';
+  inner.innerHTML = '<div style="font-weight:700;font-size:14px;margin-bottom:12px">📁 Google Drive</div>'
+    + '<div style="color:var(--text2);font-size:13px;margin-bottom:12px">Папку відкрито у новій вкладці.<br>Скопіюйте посилання на файл і вставте сюди:</div>'
+    + '<input id="drive-url-input" type="text" placeholder="https://drive.google.com/file/d/..." style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:10px;border-radius:8px;font-size:13px;margin-bottom:12px">'
+    + '<div id="drive-paste-btns" style="display:flex;gap:8px"></div>';
+
+  const btnCancel = document.createElement('button');
+  btnCancel.className = 'btn btn-secondary';
+  btnCancel.style.flex = '1';
+  btnCancel.textContent = 'Скасувати';
+  btnCancel.onclick = closeDriveModal;
+
+  const btnImport = document.createElement('button');
+  btnImport.className = 'btn btn-primary';
+  btnImport.style.flex = '2';
+  btnImport.textContent = 'Імпортувати';
+  btnImport.onclick = () => importFromDriveUrl(wh);
+
+  inner.querySelector('#drive-paste-btns').append(btnCancel, btnImport);
+  modal.appendChild(inner);
 }
 
 function showDriveModal(wh) {
