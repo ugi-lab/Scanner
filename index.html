@@ -66,7 +66,6 @@ loadScript3('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js
   });
 });
 </script>
-<script src="https://accounts.google.com/gsi/client" async defer></script>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700;800&family=Noto+Sans:wght@400;500;600;700&display=swap');
 
@@ -1976,151 +1975,232 @@ function clearSession() {
 
 
 // ======================== GOOGLE DRIVE ========================
-const GDRIVE_CLIENT_ID = '238889915807-m1rnskicjd2om8ihfkcjqohfnornl9h6.apps.googleusercontent.com';
-const GDRIVE_SCOPE = 'https://www.googleapis.com/auth/drive';
-let gdriveToken = null;
+const GDRIVE_FOLDER_ID = '1Tvbd8H30AIAIxnSOcLdhqLJxNfhmZ7oi';
+// Uses public folder — no login required
 
-function gdriveAuth(callback) {
-  if (gdriveToken) { callback(gdriveToken); return; }
-  const client = google.accounts.oauth2.initTokenClient({
-    client_id: GDRIVE_CLIENT_ID,
-    scope: GDRIVE_SCOPE,
-    callback: (resp) => {
-      if (resp.error) { toast('❌ Помилка авторизації Google'); return; }
-      gdriveToken = resp.access_token;
-      callback(gdriveToken);
-    }
-  });
-  client.requestAccessToken();
+async function driveListFiles() {
+  const url = 'https://www.googleapis.com/drive/v3/files'
+    + '?q=' + encodeURIComponent('"' + GDRIVE_FOLDER_ID + '" in parents and trashed=false')
+    + '&fields=files(id,name,mimeType,modifiedTime)'
+    + '&orderBy=modifiedTime desc'
+    + '&key=GDRIVE_API_KEY';
+  const r = await fetch(url);
+  if (!r.ok) throw new Error('HTTP ' + r.status);
+  const data = await r.json();
+  return data.files || [];
+}
+
+async function driveDownloadFile(fileId, mimeType) {
+  const isGSheet = mimeType === 'application/vnd.google-apps.spreadsheet';
+  const url = isGSheet
+    ? 'https://www.googleapis.com/drive/v3/files/' + fileId + '/export?mimeType=application/vnd.openxmlformats-officedocument.spreadsheetml.sheet&key=GDRIVE_API_KEY'
+    : 'https://www.googleapis.com/drive/v3/files/' + fileId + '?alt=media&key=GDRIVE_API_KEY';
+  const r = await fetch(url);
+  if (!r.ok) throw new Error('HTTP ' + r.status);
+  return r.arrayBuffer();
 }
 
 function drivePickFile() {
   const wh = document.getElementById('import-warehouse').value;
   if (!wh) { toast('⚠️ Спочатку оберіть склад'); return; }
+  showDriveModal(wh);
+}
 
-  gdriveAuth(token => {
-    // Load Picker API
-    if (!window.google || !window.google.picker) {
-      const s = document.createElement('script');
-      s.src = 'https://apis.google.com/js/api.js';
-      s.onload = () => {
-        gapi.load('picker', () => openPicker(token, wh));
-      };
-      document.head.appendChild(s);
-    } else {
-      openPicker(token, wh);
+function showDriveModal(wh) {
+  // Create modal if not exists
+  let modal = document.getElementById('drive-modal');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.id = 'drive-modal';
+    modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:200;display:flex;align-items:center;justify-content:center;padding:16px';
+    modal.innerHTML = '<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;width:100%;max-width:420px;max-height:80vh;display:flex;flex-direction:column">'
+      + '<div style="padding:14px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between">'
+      + '<div style="font-weight:700;font-size:14px">📁 Google Drive — Сканер</div>'
+      + '<button onclick="closeDriveModal()" style="background:none;border:none;color:var(--text2);font-size:18px;cursor:pointer">✕</button>'
+      + '</div>'
+      + '<div id="drive-file-list" style="overflow-y:auto;flex:1;padding:8px"></div>'
+      + '</div>';
+    document.body.appendChild(modal);
+  }
+  modal.style.display = 'flex';
+  modal.dataset.wh = wh;
+
+  const list = document.getElementById('drive-file-list');
+  list.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text2)">⏳ Завантажую список файлів...</div>';
+
+  // Fetch file list via public folder link
+  fetchDriveFiles(wh);
+}
+
+async function fetchDriveFiles(wh) {
+  const list = document.getElementById('drive-file-list');
+  try {
+    // Use public folder export URL
+    const folderUrl = 'https://drive.google.com/drive/folders/' + GDRIVE_FOLDER_ID;
+    
+    // Try Drive API v3 with public access
+    const apiUrl = 'https://www.googleapis.com/drive/v3/files'
+      + '?q=' + encodeURIComponent('"' + GDRIVE_FOLDER_ID + '" in parents and trashed=false')
+      + '&fields=files(id,name,mimeType,modifiedTime,size)'
+      + '&orderBy=modifiedTime+desc'
+      + '&supportsAllDrives=true';
+
+    const r = await fetch(apiUrl);
+    const data = await r.json();
+
+    if (data.error) {
+      // No API key — show manual link fallback
+      showDriveFallback(list, wh);
+      return;
     }
-  });
+
+    const files = (data.files || []).filter(f =>
+      f.name.match(/\.(xlsx|xls|csv)$/i) ||
+      f.mimeType === 'application/vnd.google-apps.spreadsheet'
+    );
+
+    if (!files.length) {
+      list.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text2)">Папка порожня.<br>Додайте Excel файли в папку "Сканер" на Drive.</div>';
+      return;
+    }
+
+    list.innerHTML = files.map(f => {
+      const date = new Date(f.modifiedTime).toLocaleDateString('uk-UA');
+      return '<div onclick="selectDriveFile('' + f.id + '','' + f.mimeType + '','' + f.name.replace(/'/g,"\'") + '')" '
+        + 'style="padding:12px 14px;cursor:pointer;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px" '
+        + 'ontouchstart="this.style.background='var(--surface2)'" ontouchend="this.style.background=''">'
+        + '<div style="font-size:20px">' + (f.mimeType.includes('spreadsheet') || f.name.match(/\.xlsx?$/i) ? '📊' : '📄') + '</div>'
+        + '<div style="flex:1"><div style="font-weight:600;font-size:13px">' + f.name + '</div>'
+        + '<div style="font-size:11px;color:var(--text2);margin-top:2px">' + date + '</div></div>'
+        + '<div style="color:var(--accent);font-size:18px">→</div>'
+        + '</div>';
+    }).join('');
+
+  } catch(e) {
+    showDriveFallback(list, wh);
+  }
 }
 
-function openPicker(token, wh) {
-  const picker = new google.picker.PickerBuilder()
-    .addView(new google.picker.DocsView()
-      .setMimeTypes('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,text/csv')
-      .setSelectFolderEnabled(false))
-    .setOAuthToken(token)
-    .setCallback((data) => {
-      if (data.action === google.picker.Action.PICKED) {
-        const file = data.docs[0];
-        toast('⏳ Завантажую ' + file.name + '...');
-        downloadDriveFile(file.id, file.name, file.mimeType, token, wh);
-      }
-    })
-    .build();
-  picker.setVisible(true);
+function showDriveFallback(list, wh) {
+  // Fallback: show files from folder via gapi
+  list.innerHTML = '<div style="padding:16px">'
+    + '<div style="color:var(--text2);font-size:13px;margin-bottom:12px">Вставте пряме посилання на файл з Google Drive:</div>'
+    + '<input id="drive-url-input" type="text" placeholder="https://drive.google.com/file/d/..." '
+    + 'style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:10px;border-radius:8px;font-size:13px;margin-bottom:10px">'
+    + '<button onclick="importFromDriveUrl('' + wh + '')" class="btn btn-primary btn-full">Імпортувати</button>'
+    + '<div style="margin-top:12px;font-size:11px;color:var(--text2)">Або <a href="https://drive.google.com/drive/folders/' + GDRIVE_FOLDER_ID + '" target="_blank" style="color:var(--accent)">відкрийте папку Drive</a> і скопіюйте посилання на файл</div>'
+    + '</div>';
 }
 
-function downloadDriveFile(fileId, fileName, mimeType, token, wh) {
-  // For Google Sheets — export as xlsx; for regular files — download directly
-  const isGSheet = mimeType === 'application/vnd.google-apps.spreadsheet';
-  const url = isGSheet
-    ? 'https://www.googleapis.com/drive/v3/files/' + fileId + '/export?mimeType=application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-    : 'https://www.googleapis.com/drive/v3/files/' + fileId + '?alt=media';
-
-  fetch(url, { headers: { Authorization: 'Bearer ' + token } })
-    .then(r => {
-      if (!r.ok) throw new Error('HTTP ' + r.status);
-      return r.arrayBuffer();
-    })
-    .then(buf => {
-      const name = isGSheet ? fileName + '.xlsx' : fileName;
-      if (name.toLowerCase().endsWith('.csv')) {
-        importCSVBuffer(buf, wh, name);
-      } else {
-        const file = new File([buf], name, { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-        importExcel(file, wh);
-      }
-      toast('✅ Завантажено з Drive: ' + name);
-    })
-    .catch(e => toast('❌ Помилка завантаження: ' + e.message));
+async function importFromDriveUrl(wh) {
+  const url = document.getElementById('drive-url-input').value.trim();
+  const match = url.match(/\/d\/([a-zA-Z0-9_-]+)/);
+  if (!match) { toast('❌ Невірне посилання'); return; }
+  const fileId = match[1];
+  toast('⏳ Завантажую...');
+  closeDriveModal();
+  try {
+    // Try direct download
+    const dlUrl = 'https://drive.google.com/uc?export=download&id=' + fileId;
+    const r = await fetch(dlUrl);
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const buf = await r.arrayBuffer();
+    const file = new File([buf], 'import.xlsx');
+    importExcel(file, wh);
+  } catch(e) {
+    toast('❌ Не вдалось завантажити. Перевірте доступ до файлу.');
+  }
 }
 
-function exportToDrive() {
+async function selectDriveFile(fileId, mimeType, fileName) {
+  const wh = document.getElementById('drive-modal').dataset.wh;
+  closeDriveModal();
+  toast('⏳ Завантажую ' + fileName + '...');
+  try {
+    const buf = await driveDownloadFile(fileId, mimeType);
+    if (mimeType === 'text/csv' || fileName.endsWith('.csv')) {
+      importCSVBuffer(buf, wh, fileName);
+    } else {
+      const file = new File([buf], fileName);
+      importExcel(file, wh);
+    }
+  } catch(e) {
+    toast('❌ Помилка: ' + e.message);
+  }
+}
+
+function closeDriveModal() {
+  const m = document.getElementById('drive-modal');
+  if (m) m.style.display = 'none';
+}
+
+async function exportToDrive() {
   if (!window.xlsxReady) { toast('⏳ Бібліотека завантажується...'); return; }
+  
+  const whName = getWhName(selectedReportWh);
+  const date = new Date().toLocaleDateString('uk-UA');
+  const rows = state.registry[selectedReportWh] || [];
+  const scans = state.scans.filter(s => s.warehouse === selectedReportWh);
+  const scanMap = {};
+  scans.forEach(s => {
+    if (!scanMap[s.order_number]) scanMap[s.order_number] = { fact: 0, client_name: s.client_name };
+    scanMap[s.order_number].fact++;
+  });
+  const allOrders = new Set([...rows.map(r => r.order_number), ...Object.keys(scanMap)]);
+  let totalExp = 0, totalFact = 0;
+  const dataRows = [];
+  allOrders.forEach(ord => {
+    const reg = rows.find(r => r.order_number === ord);
+    const scan = scanMap[ord] || { fact: 0 };
+    const exp = reg ? (reg.expected_places || 0) : 0;
+    const fact = scan.fact;
+    totalExp += exp; totalFact += fact;
+    const whObjD = state.warehouses.find(w => w.id === selectedReportWh);
+    const isCenterD = whObjD && whObjD.type === 'center';
+    let status;
+    if (!reg) status = 'Поза реєстром';
+    else if (fact === 0) status = 'Недопоставка';
+    else if (!isCenterD && exp > 0 && fact < exp) status = 'Недопоставка';
+    else if (!isCenterD && exp > 0 && fact > exp) status = 'Надлишок';
+    else status = 'OK';
+    dataRows.push({ 'Клієнт': reg?.client_name || scan.client_name || '—', '№ замовлення': ord, 'Очікується': exp || '', 'Факт': fact, 'Статус': status });
+  });
 
-  gdriveAuth(token => {
-    // First generate the xlsx blob
-    const whName = getWhName(selectedReportWh);
-    const date = new Date().toLocaleDateString('uk-UA');
-    const rows = state.registry[selectedReportWh] || [];
-    const scans = state.scans.filter(s => s.warehouse === selectedReportWh);
-    const scanMap = {};
-    scans.forEach(s => {
-      if (!scanMap[s.order_number]) scanMap[s.order_number] = { fact: 0, client_name: s.client_name };
-      scanMap[s.order_number].fact++;
-    });
+  const wb = XLSX.utils.book_new();
+  const headerInfo = [['Звіт прийому товару — ' + whName], ['Дата: ' + date], ['Замовлень: ' + allOrders.size + '   Очікується: ' + totalExp + '   Факт: ' + totalFact], []];
+  const ws = XLSX.utils.aoa_to_sheet(headerInfo);
+  XLSX.utils.sheet_add_json(ws, dataRows, { origin: 'A5' });
+  ws['!cols'] = [{ wch: 35 }, { wch: 18 }, { wch: 12 }, { wch: 8 }, { wch: 16 }];
+  ws['!pageSetup'] = { fitToPage: true, fitToWidth: 1, fitToHeight: 0, orientation: 'landscape' };
+  XLSX.utils.book_append_sheet(wb, ws, whName.substring(0, 31));
+  const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+  const blob = new Blob([wbout], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  const filename = 'zvit_' + whName + '_' + date.replace(/\./g, '-') + '.xlsx';
 
-    const allOrders = new Set([...rows.map(r => r.order_number), ...Object.keys(scanMap)]);
-    let totalExp = 0, totalFact = 0;
-    const dataRows = [];
-    allOrders.forEach(ord => {
-      const reg = rows.find(r => r.order_number === ord);
-      const scan = scanMap[ord] || { fact: 0 };
-      const exp = reg ? (reg.expected_places || 0) : 0;
-      const fact = scan.fact;
-      totalExp += exp; totalFact += fact;
-      const whObjD = state.warehouses.find(w => w.id === selectedReportWh);
-      const isCenterD = whObjD && whObjD.type === 'center';
-      let status;
-      if (!reg) status = 'Поза реєстром';
-      else if (fact === 0) status = 'Недопоставка';
-      else if (!isCenterD && exp > 0 && fact < exp) status = 'Недопоставка';
-      else if (!isCenterD && exp > 0 && fact > exp) status = 'Надлишок';
-      else status = 'OK';
-      dataRows.push({ 'Клієнт': reg?.client_name || scan.client_name || '—', '№ замовлення': ord, 'Очікується': exp || '', 'Факт': fact, 'Статус': status });
-    });
-
-    const wb = XLSX.utils.book_new();
-    const headerInfo = [['Звіт прийому товару — ' + whName], ['Дата: ' + date], ['Замовлень: ' + allOrders.size + '   Очікується: ' + totalExp + '   Факт: ' + totalFact], []];
-    const ws = XLSX.utils.aoa_to_sheet(headerInfo);
-    XLSX.utils.sheet_add_json(ws, dataRows, { origin: 'A5' });
-    ws['!cols'] = [{ wch: 35 }, { wch: 18 }, { wch: 12 }, { wch: 8 }, { wch: 16 }];
-    ws['!pageSetup'] = { fitToPage: true, fitToWidth: 1, fitToHeight: 0, orientation: 'landscape' };
-    XLSX.utils.book_append_sheet(wb, ws, whName.substring(0, 31));
-
-    const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
-    const blob = new Blob([wbout], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-    const filename = 'zvit_' + whName + '_' + date.replace(/\./g, '-') + '.xlsx';
-
-    // Upload to Drive
-    const metadata = { name: filename, mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' };
+  // Upload via resumable upload to public folder
+  toast('⏳ Завантажую звіт в Drive...');
+  try {
+    const metadata = { name: filename, parents: [GDRIVE_FOLDER_ID] };
     const form = new FormData();
     form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
     form.append('file', blob);
 
-    toast('⏳ Завантажую в Drive...');
-    fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
+    const r = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
       method: 'POST',
-      headers: { Authorization: 'Bearer ' + token },
       body: form
-    })
-    .then(r => r.json())
-    .then(data => {
-      if (data.id) toast('✅ Збережено в Google Drive: ' + filename);
-      else toast('❌ Помилка: ' + JSON.stringify(data));
-    })
-    .catch(e => toast('❌ Помилка: ' + e.message));
-  });
+    });
+    const data = await r.json();
+    if (data.id) {
+      toast('✅ Звіт збережено в Drive: ' + filename);
+    } else {
+      // Fallback to local download
+      toast('⚠️ Drive недоступний — збережено локально');
+      XLSX.writeFile(wb, filename, { cellStyles: true });
+    }
+  } catch(e) {
+    toast('⚠️ Drive недоступний — збережено локально');
+    XLSX.writeFile(wb, filename, { cellStyles: true });
+  }
 }
 
 // ======================== BEEP ========================
