@@ -699,8 +699,12 @@ loadScript3('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js
 <div id="page-import" class="page active">
 <div class="container">
 
-  <p class="section-title">Поточна сесія</p>
+  <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:10px">
+    <p class="section-title" style="margin-bottom:0">Поточна сесія</p>
+    <span id="session-date" style="font-size:12px;color:var(--accent);font-family:var(--mono)"></span>
+  </div>
   <div class="card">
+    <div id="date-warning" style="display:none;background:rgba(255,77,77,0.12);border:1px solid var(--red);border-radius:8px;padding:8px 10px;font-size:12px;color:var(--red);margin-bottom:10px"></div>
     <div class="stats-grid">
       <div class="stat-box">
         <div class="stat-val" id="stat-orders">0</div>
@@ -719,17 +723,17 @@ loadScript3('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js
 
   <p class="section-title" style="margin-top:16px">Імпорт</p>
   <div class="card">
+    <button class="btn btn-primary btn-full" style="margin-bottom:12px" onclick="drivePickFile()">📥 Завантажити з Google Drive</button>
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+      <div style="flex:1;height:1px;background:var(--border)"></div>
+      <span style="font-size:11px;color:var(--text2)">або з пристрою</span>
+      <div style="flex:1;height:1px;background:var(--border)"></div>
+    </div>
     <div class="warehouse-select">
       <label>Склад для файлу:</label>
       <select id="import-warehouse">
         <option value="">— оберіть склад —</option>
       </select>
-    </div>
-    <button class="btn btn-primary btn-full" style="margin-top:12px" onclick="drivePickFile()">📥 Завантажити з Google Drive</button>
-    <div style="display:flex;align-items:center;gap:8px;margin:10px 0">
-      <div style="flex:1;height:1px;background:var(--border)"></div>
-      <span style="font-size:11px;color:var(--text2)">або з пристрою</span>
-      <div style="flex:1;height:1px;background:var(--border)"></div>
     </div>
     <div class="drop-zone" id="drop-zone" ondragover="onDragOver(event)" ondrop="onDrop(event)" ondragleave="onDragLeave(event)">
       <input type="file" id="csv-input" accept=".xlsx,.xls,.csv" multiple onchange="handleFiles(this.files)">
@@ -946,6 +950,7 @@ let state = {
   scans: [],    // [ {order_number, client_name, warehouse, fact, place, total, manual, timestamp} ]
   warehouses: [],
   twoAddr: [],
+  registryDates: {}, // { warehouse: 'DD.MM.YYYY' }
   colMap: { order: ['order_number','номер замовлення','order','замовлення'], client: ['client_name','клієнт','client','name','ім\'я'], places: ['expected_places','місця','qty','кількість','places'] },
 };
 
@@ -961,6 +966,7 @@ function loadState() {
     { id:'mukachevo', name:'Мукачево', type:'normal' },
   ];
   state.twoAddr = LS.get('twoAddr') || [];
+  state.registryDates = LS.get('registryDates') || {};
   const savedColMap = LS.get('colMap');
   if (savedColMap) state.colMap = savedColMap;
 }
@@ -971,6 +977,7 @@ function saveState() {
   LS.set('warehouses', state.warehouses);
   LS.set('twoAddr', state.twoAddr);
   LS.set('colMap', state.colMap);
+  LS.set('registryDates', state.registryDates);
 }
 
 // ======================== PAGE NAV ========================
@@ -1077,7 +1084,20 @@ function importExcel(file, whId) {
         const expected = (Number.isInteger(pv) && pv > 0) ? pv : 1;
         records.push({ order_number: orderNum, client_name: client, expected_places: expected });
       }
-      applyRecords(records, detectedWh, file.name);
+      // Extract date from header rows (look for pattern DD.MM.YY or DD.MM.YYYY)
+      let fileDate = null;
+      for (let i = 0; i < Math.min(rows.length, 12); i++) {
+        const rowStr = (rows[i] || []).join(' ');
+        const m = rowStr.match(/(\d{1,2})[.\/](\d{1,2})[.\/](\d{2,4})/);
+        if (m) {
+          const day = m[1].padStart(2,'0');
+          const mon = m[2].padStart(2,'0');
+          const yr = m[3].length === 2 ? '20' + m[3] : m[3];
+          fileDate = day + '.' + mon + '.' + yr;
+          break;
+        }
+      }
+      applyRecords(records, detectedWh, file.name, fileDate);
     } catch (err) { toast('❌ Помилка Excel: ' + err.message); console.error(err); }
   };
   reader.readAsArrayBuffer(file);
@@ -1147,14 +1167,55 @@ function importCSVBuffer(buffer, whId, filename) {
 
 function extractOrderNum(raw) { const m = String(raw || '').match(/S\d{10}/i); return m ? m[0].toUpperCase() : null; }
 
-function applyRecords(records, whId, filename) {
+function applyRecords(records, whId, filename, fileDate) {
   if (!records.length) { toast('⚠️ Не знайдено записів: ' + filename); return; }
   if (!state.registry[whId]) state.registry[whId] = [];
   const existing = new Set(state.registry[whId].map(r => r.order_number));
   let added = 0;
   records.forEach(r => { if (!existing.has(r.order_number)) { state.registry[whId].push(r); added++; } });
-  saveState(); updateImportStats(); renderImportedList();
-  toast(`✅ ${filename}: ${added} записів → ${getWhName(whId)}`);
+  if (fileDate) state.registryDates[whId] = fileDate;
+  saveState(); updateImportStats(); renderImportedList(); checkDateConsistency();
+  const whName = getWhName(whId);
+  const places = records.reduce((s,r) => s + (r.expected_places||0), 0);
+  toast(`✅ ${whName}: ${added} замовлень, ${places} місць` + (fileDate ? ` (${fileDate})` : ''));
+}
+
+function checkDateConsistency() {
+  const dates = Object.entries(state.registryDates);
+  if (dates.length < 2) {
+    document.getElementById('date-warning').style.display = 'none';
+    updateSessionDate();
+    return;
+  }
+  const firstDate = dates[0][1];
+  const mismatched = dates.filter(([wh, d]) => d !== firstDate);
+  const warn = document.getElementById('date-warning');
+  if (mismatched.length) {
+    warn.style.display = 'block';
+    warn.innerHTML = '⚠️ Невідповідність дат: ' + mismatched.map(([wh,d]) => getWhName(wh) + ' (' + d + ')').join(', ');
+  } else {
+    warn.style.display = 'none';
+  }
+  updateSessionDate();
+}
+
+function updateSessionDate() {
+  const el = document.getElementById('session-date');
+  const dates = Object.values(state.registryDates);
+  if (!dates.length) { el.textContent = ''; return; }
+  // Get the most common date
+  const dateCount = {};
+  dates.forEach(d => dateCount[d] = (dateCount[d]||0)+1);
+  const mainDate = Object.entries(dateCount).sort((a,b)=>b[1]-a[1])[0][0];
+  // Parse DD.MM.YYYY and get day of week
+  const parts = mainDate.split('.');
+  if (parts.length === 3) {
+    const d = new Date(parseInt(parts[2]), parseInt(parts[1])-1, parseInt(parts[0]));
+    const days = ['Неділя','Понеділок','Вівторок','Середа','Четвер','П\'ятниця','Субота'];
+    el.textContent = days[d.getDay()] + ', ' + mainDate;
+  } else {
+    el.textContent = mainDate;
+  }
 }
 
 function updateImportStats() {
@@ -1962,8 +2023,12 @@ function clearSession() {
   if (!confirm('Очистити всі дані поточної сесії?')) return;
   state.registry = {};
   state.scans = [];
+  state.registryDates = {};
   LS.del('registry');
   LS.del('scans');
+  LS.del('registryDates');
+  document.getElementById('session-date').textContent = '';
+  document.getElementById('date-warning').style.display = 'none';
   stopCamera();
   updateImportStats();
   renderImportedList();
@@ -1976,34 +2041,62 @@ function clearSession() {
 
 // ======================== GOOGLE DRIVE ========================
 const GDRIVE_FOLDER_ID = '1Tvbd8H30AIAIxnSOcLdhqLJxNfhmZ7oi';
-// Uses public folder — no login required
+const GDRIVE_API_KEY = 'AIzaSyCJ-zzEk3tgRls-nv0M82730CRcYHUO9z8';
 
-async function driveListFiles() {
+// Static file mapping: warehouse id -> filename on Drive
+const DRIVE_FILE_MAP = {
+  'kyiv1':     'Київ1.xlsx',
+  'center':    'Центр.xlsx',
+  'lviv1':     'Львів1.xlsx',
+  'lviv2':     'Львів2.xlsx',
+  'rivne':     'Рівне.xlsx',
+  'mukachevo': 'Мукачево.xlsx',
+};
+
+async function findDriveFileId(filename) {
   const url = 'https://www.googleapis.com/drive/v3/files'
-    + '?q=' + encodeURIComponent('"' + GDRIVE_FOLDER_ID + '" in parents and trashed=false')
-    + '&fields=files(id,name,mimeType,modifiedTime)'
-    + '&orderBy=modifiedTime desc'
-    + '&key=AIzaSyCJ-zzEk3tgRls-nv0M82730CRcYHUO9z8';
+    + '?q=' + encodeURIComponent('"' + GDRIVE_FOLDER_ID + '" in parents and name="' + filename + '" and trashed=false')
+    + '&fields=files(id,name,mimeType)'
+    + '&key=' + GDRIVE_API_KEY;
   const r = await fetch(url);
   if (!r.ok) throw new Error('HTTP ' + r.status);
   const data = await r.json();
-  return data.files || [];
+  return (data.files && data.files[0]) ? data.files[0] : null;
 }
 
-async function driveDownloadFile(fileId, mimeType) {
-  const isGSheet = mimeType === 'application/vnd.google-apps.spreadsheet';
-  const url = isGSheet
-    ? 'https://www.googleapis.com/drive/v3/files/' + fileId + '/export?mimeType=application/vnd.openxmlformats-officedocument.spreadsheetml.sheet&key=AIzaSyCJ-zzEk3tgRls-nv0M82730CRcYHUO9z8'
-    : 'https://www.googleapis.com/drive/v3/files/' + fileId + '?alt=media&key=AIzaSyCJ-zzEk3tgRls-nv0M82730CRcYHUO9z8';
+async function downloadDriveFileById(fileId, mimeType) {
+  const url = 'https://www.googleapis.com/drive/v3/files/' + fileId + '?alt=media&key=' + GDRIVE_API_KEY;
   const r = await fetch(url);
   if (!r.ok) throw new Error('HTTP ' + r.status);
   return r.arrayBuffer();
 }
 
-function drivePickFile() {
-  const wh = document.getElementById('import-warehouse').value;
-  if (!wh) { toast('⚠️ Спочатку оберіть склад'); return; }
-  showDriveModal(wh);
+async function drivePickFile() {
+  // Download all warehouse files automatically
+  const warehouses = state.warehouses.filter(w => DRIVE_FILE_MAP[w.id]);
+  if (!warehouses.length) { toast('⚠️ Немає складів з файлами Drive'); return; }
+
+  toast('⏳ Завантажую файли з Drive...');
+  let loaded = 0, notFound = 0;
+
+  for (const wh of warehouses) {
+    const filename = DRIVE_FILE_MAP[wh.id];
+    try {
+      const fileInfo = await findDriveFileId(filename);
+      if (!fileInfo) { notFound++; continue; }
+      const buf = await downloadDriveFileById(fileInfo.id, fileInfo.mimeType);
+      const file = new File([buf], filename);
+      importExcel(file, wh.id);
+      loaded++;
+    } catch(e) {
+      console.warn('Drive: не вдалось завантажити ' + filename, e);
+      notFound++;
+    }
+  }
+
+  if (loaded === 0 && notFound > 0) {
+    toast('⚠️ Файли не знайдено в папці Drive');
+  }
 }
 
 function showDrivePasteModal(wh) {
@@ -2281,6 +2374,8 @@ renderImportedList();
 renderRecentScans();
 populateWarehouseSelects();
 showStatus('idle', 'Очікування сканування', '—', '', null, null, null, null);
+updateSessionDate();
+checkDateConsistency();
 </script>
 </body>
 </html>
