@@ -934,6 +934,18 @@ loadScript3('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js
   </div>
 </div>
 
+<!-- DUPLICATE MODAL -->
+<div class="modal-overlay" id="modal-duplicate" style="display:none">
+  <div class="modal">
+    <div class="modal-title">⛔ Можливий дубль</div>
+    <div class="modal-sub" id="modal-dup-text"></div>
+    <div class="modal-btns">
+      <button class="btn btn-secondary" onclick="closeDupModal()">Скасувати</button>
+      <button class="btn btn-danger" onclick="confirmDupScan()">Додати примусово</button>
+    </div>
+  </div>
+</div>
+
 <!-- TOAST -->
 <div class="toast" id="toast"></div>
 
@@ -1261,14 +1273,19 @@ function parseQR(raw) {
   if (!orderMatch) return null;
   const order_number = 'S' + orderMatch[1];
 
-  // Extract X/Y
+  // Extract X/Y place/total
   const xyMatch = raw.match(/(\d+)\/(\d+)/);
   let place = null, total = null;
   if (xyMatch) {
     place = parseInt(xyMatch[1]);
     total = parseInt(xyMatch[2]);
   }
-  return { order_number, place, total };
+
+  // Extract PA code for Center format: QR-PA6711704-QR-S...
+  const paMatch = raw.match(/QR-([A-Z]{2}\d+)-QR-/i);
+  const paCode = paMatch ? paMatch[1] : null;
+
+  return { order_number, place, total, paCode, rawQR: raw };
 }
 
 // ======================== SCAN LOGIC ========================
@@ -1285,20 +1302,45 @@ function getScanCount(order_number) {
 }
 
 let pendingQR = null;
+let pendingDup = null; // stores data for forced duplicate add
 
-function processScan(raw) {
+function isDuplicate(parsed) {
+  const { order_number, place, total, rawQR } = parsed;
+  const reg = findInRegistry(order_number);
+  const isCenter = reg && state.warehouses.find(w => w.id === reg.warehouse && w.type === 'center');
+
+  if (isCenter) {
+    // Center: check full raw QR string
+    return state.scans.find(s => s.rawQR === rawQR) || null;
+  } else {
+    // Other warehouses: check order + place number
+    if (place !== null && total > 0) {
+      return state.scans.find(s => s.order_number === order_number && s.place === place) || null;
+    }
+  }
+  return null;
+}
+
+function processScan(raw, forced = false) {
   const parsed = parseQR(raw);
   if (!parsed) { toast('❌ Не вдалось розпізнати QR'); return; }
 
-  const { order_number, place, total } = parsed;
+  const { order_number, place, total, paCode, rawQR } = parsed;
 
-  // Duplicate check
-  if (place && total > 0) {
-    const dupKey = order_number + '_' + place;
-    if (state.scans.find(s => s.order_number === order_number && s.place === place)) {
-      showStatus('red', '⛔ Дубль', order_number, null, null, place, total);
-      toast('⛔ Це місце вже відскановано!');
+  // Duplicate check (skip if forced)
+  if (!forced) {
+    const dup = isDuplicate(parsed);
+    if (dup) {
       beep('error');
+      showStatus('red', '⛔ Дубль!', order_number, null, null, place, total);
+      const reg = findInRegistry(order_number);
+      const isCenter = reg && state.warehouses.find(w => w.id === reg.warehouse && w.type === 'center');
+      const dupTime = dup.timestamp ? new Date(dup.timestamp).toLocaleTimeString('uk-UA', {hour:'2-digit',minute:'2-digit'}) : '';
+      document.getElementById('modal-dup-text').innerHTML =
+        `<b>${order_number}</b>${place ? ' місце ' + place + '/' + total : ''}<br>` +
+        `Вже відскановано${dupTime ? ' о ' + dupTime : ''}.<br>Додати ще раз?`;
+      pendingDup = { raw, parsed };
+      document.getElementById('modal-duplicate').style.display = 'flex';
       return;
     }
   }
@@ -1306,7 +1348,7 @@ function processScan(raw) {
   const reg = findInRegistry(order_number);
   if (!reg) {
     // Unknown order
-    pendingQR = { order_number, place, total };
+    pendingQR = { order_number, place, total, rawQR };
     document.getElementById('modal-order-num').textContent = `QR: ${raw}`;
     document.getElementById('modal-client-input').value = '';
     document.getElementById('modal-manual').classList.add('show');
@@ -1331,17 +1373,14 @@ function processScan(raw) {
     showStatus('red', '⚠️ Перевищення!', reg.client_name, order_number, fact, place, total, expected);
     beep('error');
     toast(`⚠️ Очікується ${expected}, вже ${fact}`);
-    // Still record it
-    recordScan(order_number, reg.client_name, reg.warehouse, place, total, false, expected);
+    recordScan(order_number, reg.client_name, reg.warehouse, place, total, false, expected, rawQR);
     return;
   }
 
   // Success
-  // Check if this client already has ANY scans (across all orders)
   const clientName = reg.client_name.toLowerCase().trim();
   const clientAlreadyHasScans = state.scans.some(s => s.client_name.toLowerCase().trim() === clientName);
   const isFirstForClient = !clientAlreadyHasScans;
-  const isFirstForOrder = fact === 1;
 
   let color, label;
   if (isFirstForClient) {
@@ -1353,7 +1392,7 @@ function processScan(raw) {
   }
   showStatus(color, label, reg.client_name, order_number, fact, place, total, expected);
   beep(isFirstForClient ? 'success' : 'info');
-  recordScan(order_number, reg.client_name, reg.warehouse, place, total, false, expected);
+  recordScan(order_number, reg.client_name, reg.warehouse, place, total, false, expected, rawQR);
 
   // Two-address warning
   if (state.twoAddr.some(n => reg.client_name.toLowerCase().includes(n.toLowerCase()))) {
@@ -1364,8 +1403,18 @@ function processScan(raw) {
   }
 }
 
-function recordScan(order_number, client_name, warehouse, place, total, manual, expected) {
-  state.scans.push({ order_number, client_name, warehouse, place, total, manual, expected, timestamp: Date.now() });
+function closeDupModal() {
+  document.getElementById('modal-duplicate').style.display = 'none';
+  pendingDup = null;
+}
+
+function confirmDupScan() {
+  closeDupModal();
+  if (pendingDup) processScan(pendingDup.raw, true);
+}
+
+function recordScan(order_number, client_name, warehouse, place, total, manual, expected, rawQR) {
+  state.scans.push({ order_number, client_name, warehouse, place, total, manual, expected, rawQR, timestamp: Date.now() });
   saveState();
   document.getElementById('stat-scanned').textContent = state.scans.length;
   renderRecentScans();
@@ -1472,11 +1521,18 @@ function scanLoop() {
   // Wait until jsQR library is loaded and video is ready
   if (typeof jsQR === 'undefined') return;
   if (!video || video.readyState < 2 || video.videoWidth === 0) return;
-  canvas.width  = video.videoWidth;
-  canvas.height = video.videoHeight;
+  // Scan only center 65% of frame to reduce accidental scans
+  const fullW = video.videoWidth;
+  const fullH = video.videoHeight;
+  const cropW = Math.floor(fullW * 0.65);
+  const cropH = Math.floor(fullH * 0.65);
+  const cropX = Math.floor((fullW - cropW) / 2);
+  const cropY = Math.floor((fullH - cropH) / 2);
+  canvas.width  = cropW;
+  canvas.height = cropH;
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
-  ctx.drawImage(video, 0, 0);
-  const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(video, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
+  const imageData = ctx.getImageData(0, 0, cropW, cropH);
   try {
     let code = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: 'dontInvert' });
     if (!code) code = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: 'onlyInvert' });
@@ -1558,10 +1614,10 @@ function closeModal() { document.getElementById('modal-manual').classList.remove
 function confirmManualClient() {
   const name = document.getElementById('modal-client-input').value.trim();
   if (!name || !pendingQR) return;
-  const { order_number, place, total } = pendingQR;
+  const { order_number, place, total, rawQR } = pendingQR;
   const fact = getScanCount(order_number) + 1;
   showStatus('blue', '✏️ Додано вручну', name, order_number, fact, place, total, null);
-  recordScan(order_number, name, 'manual', place, total, true, null);
+  recordScan(order_number, name, 'manual', place, total, true, null, rawQR);
   closeModal();
 }
 
