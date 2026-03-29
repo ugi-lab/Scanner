@@ -1601,7 +1601,9 @@ function onManualInput(val) {
 
 function selectSearchResult(order_number) {
   hideSearchResults();
-  document.getElementById('manual-qr').value = '';
+  const input = document.getElementById('manual-qr');
+  input.value = '';
+  input.blur(); // hide keyboard
   processScan(order_number);
 }
 
