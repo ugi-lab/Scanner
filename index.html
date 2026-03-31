@@ -906,6 +906,14 @@ loadScript3('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js
     <button class="btn btn-primary" style="margin-top:8px" onclick="saveColMap()">Зберегти</button>
   </div>
 
+  <p class="section-title" style="margin-top:16px">База клієнтів</p>
+  <div class="card">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+      <span id="clientbook-stat" style="font-size:12px;color:var(--text2)">Не завантажено</span>
+      <button class="btn btn-secondary" onclick="loadClientBookFromDrive()" style="font-size:12px;padding:6px 10px">📥 З Drive</button>
+    </div>
+  </div>
+
   <p class="section-title" style="margin-top:16px">Клієнти з двома адресами</p>
   <div class="card">
     <div class="two-addr-list" id="two-addr-list"></div>
@@ -926,7 +934,9 @@ loadScript3('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js
   <div class="modal">
     <div class="modal-title">⚠️ Замовлення не знайдено</div>
     <div class="modal-sub" id="modal-order-num"></div>
-    <input type="text" id="modal-client-input" placeholder="Введіть ім'я клієнта...">
+    <input type="text" id="modal-client-input" placeholder="Код або назва клієнта..." autocomplete="off" oninput="onClientSearch(this.value)">
+    <div id="modal-client-results" style="max-height:180px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;margin-top:6px;display:none"></div>
+    <div id="modal-client-selected" style="display:none;margin-top:6px;padding:8px 10px;background:rgba(0,212,170,0.1);border:1px solid var(--accent);border-radius:8px;font-size:13px;color:var(--accent)"></div>
     <div class="modal-btns">
       <button class="btn btn-secondary" onclick="closeModal()">Скасувати</button>
       <button class="btn btn-primary" onclick="confirmManualClient()">Додати</button>
@@ -963,6 +973,7 @@ let state = {
   warehouses: [],
   twoAddr: [],
   registryDates: {}, // { warehouse: 'DD.MM.YYYY' }
+  clientBook: [], // [ {code, name} ] loaded from Клієнти.xlsx
   colMap: { order: ['order_number','номер замовлення','order','замовлення'], client: ['client_name','клієнт','client','name','ім\'я'], places: ['expected_places','місця','qty','кількість','places'] },
 };
 
@@ -979,6 +990,7 @@ function loadState() {
   ];
   state.twoAddr = LS.get('twoAddr') || [];
   state.registryDates = LS.get('registryDates') || {};
+  state.clientBook = LS.get('clientBook') || [];
   const savedColMap = LS.get('colMap');
   if (savedColMap) state.colMap = savedColMap;
 }
@@ -990,6 +1002,7 @@ function saveState() {
   LS.set('twoAddr', state.twoAddr);
   LS.set('colMap', state.colMap);
   LS.set('registryDates', state.registryDates);
+  LS.set('clientBook', state.clientBook);
 }
 
 // ======================== PAGE NAV ========================
@@ -1347,10 +1360,13 @@ function processScan(raw, forced = false) {
 
   const reg = findInRegistry(order_number);
   if (!reg) {
-    // Unknown order
-    pendingQR = { order_number, place, total, rawQR };
-    document.getElementById('modal-order-num').textContent = `QR: ${raw}`;
+    // Unknown order — auto-detect Center from QR format
+    const isCenterQR = /^QR-/i.test(raw);
+    pendingQR = { order_number, place, total, rawQR, autoWarehouse: isCenterQR ? 'center' : null };
+    document.getElementById('modal-order-num').textContent = (isCenterQR ? '🏢 Центр · ' : '') + 'QR: ' + raw;
     document.getElementById('modal-client-input').value = '';
+    document.getElementById('modal-client-results').style.display = 'none';
+    document.getElementById('modal-client-selected').style.display = 'none';
     document.getElementById('modal-manual').classList.add('show');
     showStatus('red', '❌ Не в реєстрі', order_number, null, null, place, total);
     beep('error');
@@ -1616,10 +1632,11 @@ function closeModal() { document.getElementById('modal-manual').classList.remove
 function confirmManualClient() {
   const name = document.getElementById('modal-client-input').value.trim();
   if (!name || !pendingQR) return;
-  const { order_number, place, total, rawQR } = pendingQR;
+  const { order_number, place, total, rawQR, autoWarehouse } = pendingQR;
+  const warehouse = autoWarehouse || 'manual';
   const fact = getScanCount(order_number) + 1;
   showStatus('blue', '✏️ Додано вручну', name, order_number, fact, place, total, null);
-  recordScan(order_number, name, 'manual', place, total, true, null, rawQR);
+  recordScan(order_number, name, warehouse, place, total, true, null, rawQR);
   closeModal();
 }
 
@@ -1996,6 +2013,7 @@ function printReport() {
 
 // ======================== SETTINGS ========================
 function renderSettings() {
+  updateClientBookStat();
   // Warehouses
   const el = document.getElementById('warehouses-list');
   el.innerHTML = state.warehouses.map((w,i) => `
@@ -2396,6 +2414,89 @@ async function exportToDrive() {
     toast('⚠️ Drive недоступний — збережено локально');
     XLSX.writeFile(wb, filename, { cellStyles: true });
   }
+}
+
+// ======================== CLIENT BOOK ========================
+async function loadClientBookFromDrive() {
+  toast('⏳ Завантажую базу клієнтів...');
+  try {
+    const fileInfo = await findDriveFileId('Клієнти.xlsx');
+    if (!fileInfo) { toast('❌ Файл Клієнти.xlsx не знайдено в папці Drive'); return; }
+    const buf = await downloadDriveFileById(fileInfo.id, fileInfo.mimeType);
+    importClientBook(buf);
+  } catch(e) {
+    toast('❌ Помилка: ' + e.message);
+  }
+}
+
+function importClientBook(buf) {
+  try {
+    const wb = XLSX.read(buf, { type: 'array' });
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+    const clients = [];
+    for (let i = 1; i < rows.length; i++) {
+      const code = String(rows[i][0] || '').trim();
+      const name = String(rows[i][1] || '').trim();
+      if (code && name) clients.push({ code, name });
+    }
+    state.clientBook = clients;
+    saveState();
+    updateClientBookStat();
+    toast('✅ База клієнтів: ' + clients.length + ' записів');
+  } catch(e) {
+    toast('❌ Помилка читання файлу: ' + e.message);
+  }
+}
+
+function updateClientBookStat() {
+  const el = document.getElementById('clientbook-stat');
+  if (!el) return;
+  el.textContent = state.clientBook.length
+    ? state.clientBook.length + ' клієнтів завантажено'
+    : 'Не завантажено';
+}
+
+function onClientSearch(val) {
+  val = val.trim().toLowerCase();
+  const results = document.getElementById('modal-client-results');
+  const selected = document.getElementById('modal-client-selected');
+  selected.style.display = 'none';
+
+  if (!val || val.length < 1) { results.style.display = 'none'; return; }
+  if (!state.clientBook.length) { results.style.display = 'none'; return; }
+
+  const matches = state.clientBook.filter(c =>
+    c.code.toLowerCase().includes(val) ||
+    c.name.toLowerCase().includes(val)
+  ).slice(0, 8);
+
+  if (!matches.length) {
+    results.style.display = 'none';
+    return;
+  }
+
+  results.style.display = 'block';
+  results.innerHTML = '';
+  matches.forEach(c => {
+    const el = document.createElement('div');
+    el.style.cssText = 'padding:10px 12px;cursor:pointer;border-bottom:1px solid var(--border);display:flex;gap:10px;align-items:center';
+    el.innerHTML = '<span style="font-family:var(--mono);font-size:11px;color:var(--text2);min-width:40px">' + c.code + '</span>'
+      + '<span style="font-size:13px;font-weight:600">' + c.name + '</span>';
+    el.addEventListener('touchstart', () => el.style.background = 'var(--surface2)');
+    el.addEventListener('touchend', () => el.style.background = '');
+    el.addEventListener('click', () => selectClientFromBook(c));
+    results.appendChild(el);
+  });
+}
+
+function selectClientFromBook(c) {
+  document.getElementById('modal-client-input').value = c.name;
+  document.getElementById('modal-client-input').blur();
+  document.getElementById('modal-client-results').style.display = 'none';
+  const sel = document.getElementById('modal-client-selected');
+  sel.style.display = 'block';
+  sel.textContent = '✓ ' + c.code + ' — ' + c.name;
 }
 
 // ======================== BEEP ========================
