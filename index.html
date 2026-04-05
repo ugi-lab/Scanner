@@ -1541,8 +1541,8 @@ function scanLoop() {
   // Scan only center 65% of frame to reduce accidental scans
   const fullW = video.videoWidth;
   const fullH = video.videoHeight;
-  const cropW = Math.floor(fullW * 0.65);
-  const cropH = Math.floor(fullH * 0.65);
+  const cropW = Math.floor(fullW * 0.55);
+  const cropH = Math.floor(fullH * 0.50);
   const cropX = Math.floor((fullW - cropW) / 2);
   const cropY = Math.floor((fullH - cropH) / 2);
   canvas.width  = cropW;
@@ -1555,7 +1555,7 @@ function scanLoop() {
     if (!code) code = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: 'onlyInvert' });
     if (code && code.data) {
       const now = Date.now();
-      if (code.data !== lastScanned || now - lastScannedTime > 3000) {
+      if (code.data !== lastScanned || now - lastScannedTime > 1500) {
         lastScanned = code.data;
         lastScannedTime = now;
         processScan(code.data);
