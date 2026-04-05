@@ -847,9 +847,7 @@ loadScript3('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js
   <div style="display:flex;gap:8px;margin:12px 0">
     <div style="display:flex;gap:8px">
       <button class="btn btn-primary btn-full" onclick="exportXLSX()">📊 Експорт Excel</button>
-      <button class="btn btn-secondary btn-full" onclick="exportToDrive()">📤 В Google Drive</button>
       <button class="btn btn-secondary btn-full" onclick="exportToTelegram()">✈️ В Telegram</button>
-      <button class="btn btn-secondary btn-full" onclick="sendNotificationList()">📨 Оповіщення в Telegram</button>
       <button class="btn btn-secondary btn-full" onclick="printReport()">🖨 Друк</button>
     </div>
   </div>
@@ -2507,21 +2505,31 @@ function selectClientFromBook(c) {
 const TG_TOKEN = '8692620167:AAHZH-a3QoMDT-pjqQGPYabf7H5Cr99mxyQ';
 const TG_CHAT_ID = '594959491';
 
-async function exportToTelegram() {
-  if (!window.xlsxReady) { toast('⏳ Бібліотека завантажується...'); return; }
+async function sendToTelegram(blob, filename, caption) {
+  const form = new FormData();
+  form.append('chat_id', TG_CHAT_ID);
+  form.append('document', blob, filename);
+  form.append('caption', caption);
+  const r = await fetch('https://api.telegram.org/bot' + TG_TOKEN + '/sendDocument', {
+    method: 'POST',
+    body: form
+  });
+  const data = await r.json();
+  if (!data.ok) throw new Error(data.description || 'Telegram error');
+  return data;
+}
 
-  const whName = getWhName(selectedReportWh);
+function buildReportBlob(whId) {
+  const whName = getWhName(whId);
   const date = new Date().toLocaleDateString('uk-UA');
-
-  // Build report data (same as exportXLSX)
-  const rows = state.registry[selectedReportWh] || [];
-  const scans = state.scans.filter(s => s.warehouse === selectedReportWh);
+  const rows = state.registry[whId] || [];
+  const scans = state.scans.filter(s => s.warehouse === whId);
   const scanMap = {};
   scans.forEach(s => {
     if (!scanMap[s.order_number]) scanMap[s.order_number] = { fact: 0, client_name: s.client_name, manual: s.manual };
     scanMap[s.order_number].fact++;
   });
-  state.scans.filter(s => s.warehouse === 'manual' || s.warehouse === selectedReportWh).forEach(s => {
+  state.scans.filter(s => s.warehouse === 'manual').forEach(s => {
     if (!rows.find(r => r.order_number === s.order_number) && s.manual) {
       if (!scanMap[s.order_number]) scanMap[s.order_number] = { fact: 0, client_name: s.client_name, manual: true };
       scanMap[s.order_number].fact++;
@@ -2529,16 +2537,19 @@ async function exportToTelegram() {
   });
 
   const allOrders = new Set([...rows.map(r => r.order_number), ...Object.keys(scanMap)]);
+  if (!allOrders.size) return null;
+
   let totalExp = 0, totalFact = 0;
   const dataRows = [];
+  const whObj = state.warehouses.find(w => w.id === whId);
+  const isCenter = whObj && whObj.type === 'center';
+
   allOrders.forEach(ord => {
     const reg = rows.find(r => r.order_number === ord);
     const scan = scanMap[ord] || { fact: 0 };
     const exp = reg ? (reg.expected_places || 0) : 0;
     const fact = scan.fact;
     totalExp += exp; totalFact += fact;
-    const whObj = state.warehouses.find(w => w.id === selectedReportWh);
-    const isCenter = whObj && whObj.type === 'center';
     let status;
     if (!reg) status = 'Поза реєстром';
     else if (fact === 0) status = 'Недопоставка';
@@ -2566,85 +2577,87 @@ async function exportToTelegram() {
   XLSX.utils.book_append_sheet(wb, ws, whName.substring(0, 31));
 
   const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
-  const blob = new Blob([wbout], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-  const filename = 'Результат_' + whName + '_' + date.replace(/\./g, '-') + '.xlsx';
-
-  toast('⏳ Відправляю в Telegram...');
-
-  try {
-    const form = new FormData();
-    form.append('chat_id', TG_CHAT_ID);
-    form.append('document', blob, filename);
-    form.append('caption', '📦 Результат прийому: ' + whName + '\nДата: ' + date + '\nЗамовлень: ' + allOrders.size + ', Факт: ' + totalFact);
-
-    const r = await fetch('https://api.telegram.org/bot' + TG_TOKEN + '/sendDocument', {
-      method: 'POST',
-      body: form
-    });
-    const data = await r.json();
-    if (data.ok) {
-      toast('✅ Файл відправлено в Telegram!');
-    } else {
-      toast('❌ Помилка Telegram: ' + (data.description || 'невідома'));
-    }
-  } catch(e) {
-    toast('❌ Помилка: ' + e.message);
-  }
+  return {
+    blob: new Blob([wbout], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }),
+    filename: 'Результат_' + whName + '_' + date.replace(/\./g, '-') + '.xlsx',
+    caption: '📦 ' + whName + ' · ' + date + ' · Замовлень: ' + allOrders.size + ', Факт: ' + totalFact,
+    totalFact
+  };
 }
 
+function buildNotificationBlob() {
+  const date = new Date().toLocaleDateString('uk-UA');
 
-async function sendNotificationList() {
-  if (!window.xlsxReady) { toast('⏳ Бібліотека завантажується...'); return; }
-
-  // Collect all clients with УЖГОРОД СКЛАД from all warehouses
+  // Only clients with УЖГОРОД СКЛАД AND at least one scanned order
+  const scannedOrders = new Set(state.scans.map(s => s.order_number));
   const clientSet = new Set();
+
   Object.values(state.registry).forEach(rows => {
     rows.forEach(r => {
-      if (r.delivery_city && r.delivery_city.toUpperCase().includes('УЖГОРОД СКЛАД')) {
+      if (
+        r.delivery_city &&
+        r.delivery_city.toUpperCase().includes('УЖГОРОД СКЛАД') &&
+        scannedOrders.has(r.order_number)
+      ) {
         clientSet.add(r.client_name.trim());
       }
     });
   });
 
-  if (!clientSet.size) {
-    toast('⚠️ Немає клієнтів з самовивозом (УЖГОРОД СКЛАД)');
-    return;
-  }
+  if (!clientSet.size) return null;
 
-  const date = new Date().toLocaleDateString('uk-UA');
   const clientList = Array.from(clientSet).sort();
-
-  // Build Excel file
   const wb = XLSX.utils.book_new();
   const wsData = [['Клієнт'], ...clientList.map(n => [n])];
   const ws = XLSX.utils.aoa_to_sheet(wsData);
   ws['!cols'] = [{ wch: 40 }];
   XLSX.utils.book_append_sheet(wb, ws, 'Оповіщення');
-
   const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
-  const blob = new Blob([wbout], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-  const filename = 'Оповіщення_' + date.replace(/\./g, '-') + '.xlsx';
+  return {
+    blob: new Blob([wbout], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }),
+    filename: 'Оповіщення_' + date.replace(/\./g, '-') + '.xlsx',
+    caption: '📨 Оповіщення про самовивіз · ' + date + ' · Клієнтів: ' + clientList.length
+  };
+}
 
-  toast('⏳ Відправляю оповіщення в Telegram...');
+async function exportToTelegram() {
+  if (!window.xlsxReady) { toast('⏳ Бібліотека завантажується...'); return; }
 
-  try {
-    const form = new FormData();
-    form.append('chat_id', TG_CHAT_ID);
-    form.append('document', blob, filename);
-    form.append('caption', '📨 Оповіщення про самовивіз\nДата: ' + date + '\nКлієнтів: ' + clientList.length);
+  const whIds = Object.keys(state.registry);
+  if (!whIds.length) { toast('⚠️ Немає імпортованих даних'); return; }
 
-    const r = await fetch('https://api.telegram.org/bot' + TG_TOKEN + '/sendDocument', {
-      method: 'POST',
-      body: form
-    });
-    const data = await r.json();
-    if (data.ok) {
-      toast('✅ Оповіщення відправлено! Клієнтів: ' + clientList.length);
-    } else {
-      toast('❌ Помилка Telegram: ' + (data.description || 'невідома'));
+  toast('⏳ Формую та відправляю файли...');
+
+  let sent = 0, skipped = 0, errors = 0;
+
+  // Send report for each warehouse that has scans
+  for (const whId of whIds) {
+    const result = buildReportBlob(whId);
+    if (!result) { skipped++; continue; }
+    try {
+      await sendToTelegram(result.blob, result.filename, result.caption);
+      sent++;
+    } catch(e) {
+      errors++;
+      console.error('TG error for ' + whId, e);
     }
-  } catch(e) {
-    toast('❌ Помилка: ' + e.message);
+  }
+
+  // Send notification list
+  const notif = buildNotificationBlob();
+  if (notif) {
+    try {
+      await sendToTelegram(notif.blob, notif.filename, notif.caption);
+      toast('✅ Відправлено: ' + sent + ' звітів + оповіщення' + (errors ? ' (помилок: ' + errors + ')' : ''));
+    } catch(e) {
+      toast('✅ Звіти відправлено (' + sent + '), помилка оповіщення: ' + e.message);
+    }
+  } else {
+    if (sent > 0) {
+      toast('✅ Відправлено ' + sent + ' звітів. Клієнтів з самовивозом немає.');
+    } else {
+      toast('⚠️ Немає даних для відправки');
+    }
   }
 }
 
@@ -2656,13 +2669,13 @@ function beep(type) {
     const g = ctx.createGain();
     o.connect(g);
     g.connect(ctx.destination);
-    if (type === 'success') { o.frequency.value = 880; g.gain.value = 0.3; }
-    else if (type === 'info') { o.frequency.value = 660; g.gain.value = 0.2; }
-    else if (type === 'error') { o.frequency.value = 220; g.gain.value = 0.4; }
-    else if (type === 'warn') { o.frequency.value = 550; g.gain.value = 0.2; }
+    if (type === 'success') { o.frequency.value = 880; g.gain.value = 0.8; }
+    else if (type === 'info') { o.frequency.value = 660; g.gain.value = 0.7; }
+    else if (type === 'error') { o.frequency.value = 220; g.gain.value = 0.9; }
+    else if (type === 'warn') { o.frequency.value = 550; g.gain.value = 0.7; }
     o.start();
-    g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.3);
-    o.stop(ctx.currentTime + 0.3);
+    g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.4);
+    o.stop(ctx.currentTime + 0.4);
   } catch(e) {}
 }
 
