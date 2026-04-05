@@ -700,7 +700,7 @@ loadScript3('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js
 <div class="container">
 
   <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:10px">
-    <p class="section-title" style="margin-bottom:0">Поточна сесія</p>
+    <p class="section-title" style="margin-bottom:0">Поточна сесія V4.16</p>
     <span id="session-date" style="font-size:12px;color:var(--accent);font-family:var(--mono)"></span>
   </div>
   <div class="card">
@@ -848,7 +848,6 @@ loadScript3('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js
     <div style="display:flex;gap:8px">
       <button class="btn btn-primary btn-full" onclick="exportXLSX()">📊 Експорт Excel</button>
       <button class="btn btn-secondary btn-full" onclick="exportToTelegram()">✈️ В Telegram</button>
-      <button class="btn btn-secondary btn-full" onclick="printReport()">🖨 Друк</button>
     </div>
   </div>
 
@@ -861,7 +860,6 @@ loadScript3('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js
           <th>Exp</th>
           <th>Fact</th>
           <th>Статус</th>
-          <th>Примітка</th>
         </tr>
       </thead>
       <tbody id="report-tbody"></tbody>
@@ -1761,7 +1759,6 @@ function renderReportTable() {
       <td>${exp || '—'}</td>
       <td>${fact}</td>
       <td><span class="status-pill ${statusCls}">${statusTxt}</span></td>
-      <td style="font-size:11px;color:var(--text2)">${notes.join(', ')}</td>
     </tr>`);
   });
 
@@ -1829,8 +1826,7 @@ function exportXLSX() {
       '№ замовлення': ord,
       'Очікується': exp || '',
       'Факт': fact,
-      'Статус': status,
-      'Примітка': notes.join(', ')
+      'Статус': status
     });
   });
 
@@ -1855,8 +1851,7 @@ function exportXLSX() {
     { wch: 18 }, // № замовлення
     { wch: 12 }, // Очікується
     { wch: 8  }, // Факт
-    { wch: 16 }, // Статус
-    { wch: 20 }  // Примітка
+    { wch: 16 }  // Статус
   ];
 
   // Add borders to data rows (row 5 = table header + data rows below)
@@ -1955,8 +1950,7 @@ function printReport() {
       ord,
       exp || '—',
       fact,
-      status,
-      notes.join(', ')
+      status
     ]);
   });
 
@@ -1974,7 +1968,7 @@ function printReport() {
 
   // Table
   doc.autoTable({
-    head: [['Клієнт', '№ замовлення', 'Exp', 'Fact', 'Статус', 'Примітка']],
+    head: [['Клієнт', '№ замовлення', 'Exp', 'Fact', 'Статус']],
     body: tableRows,
     startY: 33,
     styles: { font: 'helvetica', fontSize: 9, cellPadding: 2 },
@@ -2560,7 +2554,7 @@ function buildReportBlob(whId) {
     const clientName = reg?.client_name || scan.client_name || '—';
     if (state.twoAddr.some(n => clientName.toLowerCase().includes(n.toLowerCase()))) notes.push('2 адреси');
     if (scan.manual) notes.push('Вручну');
-    dataRows.push({ 'Клієнт': clientName, '№ замовлення': ord, 'Очікується': exp || '', 'Факт': fact, 'Статус': status, 'Примітка': notes.join(', ') });
+    dataRows.push({ 'Клієнт': clientName, '№ замовлення': ord, 'Очікується': exp || '', 'Факт': fact, 'Статус': status });
   });
 
   const wb = XLSX.utils.book_new();
