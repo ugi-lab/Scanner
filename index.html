@@ -700,7 +700,7 @@ loadScript3('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js
 <div class="container">
 
   <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:10px">
-    <p class="section-title" style="margin-bottom:0">Поточна сесія V4.16</p>
+    <p class="section-title" style="margin-bottom:0">Поточна сесія V4.17</p>
     <span id="session-date" style="font-size:12px;color:var(--accent);font-family:var(--mono)"></span>
   </div>
   <div class="card">
@@ -1389,7 +1389,7 @@ function processScan(raw, forced = false) {
     showStatus('red', '⚠️ Перевищення!', reg.client_name, order_number, fact, place, total, expected);
     beep('error');
     toast(`⚠️ Очікується ${expected}, вже ${fact}`);
-    recordScan(order_number, reg.client_name, reg.warehouse, place, total, false, expected, rawQR);
+    recordScan(order_number, reg.client_name, reg.warehouse, place, total, false, expected, rawQR, paCode);
     return;
   }
 
@@ -1408,7 +1408,7 @@ function processScan(raw, forced = false) {
   }
   showStatus(color, label, reg.client_name, order_number, fact, place, total, expected);
   beep(isFirstForClient ? 'success' : 'info');
-  recordScan(order_number, reg.client_name, reg.warehouse, place, total, false, expected, rawQR);
+  recordScan(order_number, reg.client_name, reg.warehouse, place, total, false, expected, rawQR, paCode);
 
   // Two-address warning
   if (state.twoAddr.some(n => reg.client_name.toLowerCase().includes(n.toLowerCase()))) {
@@ -1429,8 +1429,8 @@ function confirmDupScan() {
   if (pendingDup) processScan(pendingDup.raw, true);
 }
 
-function recordScan(order_number, client_name, warehouse, place, total, manual, expected, rawQR) {
-  state.scans.push({ order_number, client_name, warehouse, place, total, manual, expected, rawQR, timestamp: Date.now() });
+function recordScan(order_number, client_name, warehouse, place, total, manual, expected, rawQR, paCode) {
+  state.scans.push({ order_number, client_name, warehouse, place, total, manual, expected, rawQR, paCode, timestamp: Date.now() });
   saveState();
   document.getElementById('stat-scanned').textContent = state.scans.length;
   renderRecentScans();
@@ -1472,7 +1472,7 @@ function renderRecentScans() {
         <div class="scan-item-name">${s.client_name || '—'}</div>
         <div class="scan-item-order">${s.order_number}</div>
       </div>
-      <div class="scan-item-count">${s.place ? s.place+'/'+(s.total||'?') : fact}</div>
+      <div class="scan-item-count">${s.paCode ? s.paCode : s.place ? s.place+'/'+(s.total||'?') : '—'}</div>
     </div>`;
   }).join('') || '<div style="color:var(--text2);font-size:13px;text-align:center;padding:16px">Ще немає сканувань</div>';
 }
@@ -1882,7 +1882,7 @@ function exportXLSX() {
       'Час': new Date(s.timestamp).toLocaleString('uk-UA'),
       'Клієнт': s.client_name || '—',
       '№ замовлення': s.order_number,
-      'Місце': s.place ? (s.place + '/' + (s.total || '?')) : '—',
+      'Місце': s.paCode ? s.paCode : s.place ? (s.place + '/' + (s.total || '?')) : '—',
       'Склад': getWhName(s.warehouse),
       'Вручну': s.manual ? 'Так' : ''
     })).reverse(); // newest first
