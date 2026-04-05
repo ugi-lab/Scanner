@@ -849,6 +849,7 @@ loadScript3('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js
       <button class="btn btn-primary btn-full" onclick="exportXLSX()">📊 Експорт Excel</button>
       <button class="btn btn-secondary btn-full" onclick="exportToDrive()">📤 В Google Drive</button>
       <button class="btn btn-secondary btn-full" onclick="exportToTelegram()">✈️ В Telegram</button>
+      <button class="btn btn-secondary btn-full" onclick="sendNotificationList()">📨 Оповіщення в Telegram</button>
       <button class="btn btn-secondary btn-full" onclick="printReport()">🖨 Друк</button>
     </div>
   </div>
@@ -1060,7 +1061,7 @@ function importExcel(file, whId) {
         if (found) detectedWh = found.id;
       }
 
-      let colOrder = -1, colClient = -1, colPlaces = -1, startIdx = -1;
+      let colOrder = -1, colClient = -1, colPlaces = -1, colDelivery = -1, startIdx = -1;
 
       // Strategy 1: named header row
       for (let i = 0; i < Math.min(rows.length, 25); i++) {
@@ -1070,6 +1071,7 @@ function importExcel(file, whId) {
           if (/заказ.продажи|order.numb|замовлення/i.test(v)) colOrder = j;
           if (/клиент.назван|client.name|клієнт.назв/i.test(v)) colClient = j;
           if (/кол.?во.?мест|expected.?place|кількість/i.test(v)) colPlaces = j;
+          if (/доставка.?город|delivery.?city/i.test(v)) colDelivery = j;
         }
         if (colOrder >= 0 && colClient >= 0) { startIdx = i + 1; break; }
       }
@@ -1108,7 +1110,8 @@ function importExcel(file, whId) {
         const client = String(row[colClient] || '').trim() || 'Невідомо';
         const pv = parseFloat(String(row[colPlaces] || '1').replace(',', '.'));
         const expected = (Number.isInteger(pv) && pv > 0) ? pv : 1;
-        records.push({ order_number: orderNum, client_name: client, expected_places: expected });
+        const delivery = colDelivery >= 0 ? String(row[colDelivery] || '').trim() : '';
+        records.push({ order_number: orderNum, client_name: client, expected_places: expected, delivery_city: delivery });
       }
       // Extract date from header rows (look for pattern DD.MM.YY or DD.MM.YYYY)
       let fileDate = null;
@@ -2581,6 +2584,62 @@ async function exportToTelegram() {
     const data = await r.json();
     if (data.ok) {
       toast('✅ Файл відправлено в Telegram!');
+    } else {
+      toast('❌ Помилка Telegram: ' + (data.description || 'невідома'));
+    }
+  } catch(e) {
+    toast('❌ Помилка: ' + e.message);
+  }
+}
+
+
+async function sendNotificationList() {
+  if (!window.xlsxReady) { toast('⏳ Бібліотека завантажується...'); return; }
+
+  // Collect all clients with УЖГОРОД СКЛАД from all warehouses
+  const clientSet = new Set();
+  Object.values(state.registry).forEach(rows => {
+    rows.forEach(r => {
+      if (r.delivery_city && r.delivery_city.toUpperCase().includes('УЖГОРОД СКЛАД')) {
+        clientSet.add(r.client_name.trim());
+      }
+    });
+  });
+
+  if (!clientSet.size) {
+    toast('⚠️ Немає клієнтів з самовивозом (УЖГОРОД СКЛАД)');
+    return;
+  }
+
+  const date = new Date().toLocaleDateString('uk-UA');
+  const clientList = Array.from(clientSet).sort();
+
+  // Build Excel file
+  const wb = XLSX.utils.book_new();
+  const wsData = [['Клієнт'], ...clientList.map(n => [n])];
+  const ws = XLSX.utils.aoa_to_sheet(wsData);
+  ws['!cols'] = [{ wch: 40 }];
+  XLSX.utils.book_append_sheet(wb, ws, 'Оповіщення');
+
+  const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+  const blob = new Blob([wbout], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  const filename = 'Оповіщення_' + date.replace(/\./g, '-') + '.xlsx';
+
+  toast('⏳ Відправляю оповіщення в Telegram...');
+
+  try {
+    const form = new FormData();
+    form.append('chat_id', TG_CHAT_ID);
+    form.append('document', blob, filename);
+    form.append('caption', '📨 Оповіщення про самовивіз\nДата: ' + date + '\nКлієнтів: ' + clientList.length);
+
+    const r = await fetch('https://api.telegram.org/bot' + TG_TOKEN + '/sendDocument', {
+      method: 'POST',
+      body: form
+    });
+    const data = await r.json();
+    if (data.ok) {
+      toast('✅ Оповіщення відправлено! Клієнтів: ' + clientList.length);
     } else {
       toast('❌ Помилка Telegram: ' + (data.description || 'невідома'));
     }
