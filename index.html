@@ -848,6 +848,7 @@ loadScript3('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js
     <div style="display:flex;gap:8px">
       <button class="btn btn-primary btn-full" onclick="exportXLSX()">📊 Експорт Excel</button>
       <button class="btn btn-secondary btn-full" onclick="exportToDrive()">📤 В Google Drive</button>
+      <button class="btn btn-secondary btn-full" onclick="exportToTelegram()">✈️ В Telegram</button>
       <button class="btn btn-secondary btn-full" onclick="printReport()">🖨 Друк</button>
     </div>
   </div>
@@ -2497,6 +2498,95 @@ function selectClientFromBook(c) {
   const sel = document.getElementById('modal-client-selected');
   sel.style.display = 'block';
   sel.textContent = '✓ ' + c.code + ' — ' + c.name;
+}
+
+// ======================== TELEGRAM ========================
+const TG_TOKEN = '8692620167:AAHZH-a3QoMDT-pjqQGPYabf7H5Cr99mxyQ';
+const TG_CHAT_ID = '594959491';
+
+async function exportToTelegram() {
+  if (!window.xlsxReady) { toast('⏳ Бібліотека завантажується...'); return; }
+
+  const whName = getWhName(selectedReportWh);
+  const date = new Date().toLocaleDateString('uk-UA');
+
+  // Build report data (same as exportXLSX)
+  const rows = state.registry[selectedReportWh] || [];
+  const scans = state.scans.filter(s => s.warehouse === selectedReportWh);
+  const scanMap = {};
+  scans.forEach(s => {
+    if (!scanMap[s.order_number]) scanMap[s.order_number] = { fact: 0, client_name: s.client_name, manual: s.manual };
+    scanMap[s.order_number].fact++;
+  });
+  state.scans.filter(s => s.warehouse === 'manual' || s.warehouse === selectedReportWh).forEach(s => {
+    if (!rows.find(r => r.order_number === s.order_number) && s.manual) {
+      if (!scanMap[s.order_number]) scanMap[s.order_number] = { fact: 0, client_name: s.client_name, manual: true };
+      scanMap[s.order_number].fact++;
+    }
+  });
+
+  const allOrders = new Set([...rows.map(r => r.order_number), ...Object.keys(scanMap)]);
+  let totalExp = 0, totalFact = 0;
+  const dataRows = [];
+  allOrders.forEach(ord => {
+    const reg = rows.find(r => r.order_number === ord);
+    const scan = scanMap[ord] || { fact: 0 };
+    const exp = reg ? (reg.expected_places || 0) : 0;
+    const fact = scan.fact;
+    totalExp += exp; totalFact += fact;
+    const whObj = state.warehouses.find(w => w.id === selectedReportWh);
+    const isCenter = whObj && whObj.type === 'center';
+    let status;
+    if (!reg) status = 'Поза реєстром';
+    else if (fact === 0) status = 'Недопоставка';
+    else if (!isCenter && exp > 0 && fact < exp) status = 'Недопоставка';
+    else if (!isCenter && exp > 0 && fact > exp) status = 'Надлишок';
+    else status = 'OK';
+    const notes = [];
+    const clientName = reg?.client_name || scan.client_name || '—';
+    if (state.twoAddr.some(n => clientName.toLowerCase().includes(n.toLowerCase()))) notes.push('2 адреси');
+    if (scan.manual) notes.push('Вручну');
+    dataRows.push({ 'Клієнт': clientName, '№ замовлення': ord, 'Очікується': exp || '', 'Факт': fact, 'Статус': status, 'Примітка': notes.join(', ') });
+  });
+
+  const wb = XLSX.utils.book_new();
+  const headerInfo = [
+    ['Звіт прийому товару — ' + whName],
+    ['Дата: ' + date],
+    ['Замовлень: ' + allOrders.size + '   Очікується: ' + totalExp + '   Факт: ' + totalFact],
+    []
+  ];
+  const ws = XLSX.utils.aoa_to_sheet(headerInfo);
+  XLSX.utils.sheet_add_json(ws, dataRows, { origin: 'A5' });
+  ws['!cols'] = [{ wch: 35 }, { wch: 18 }, { wch: 12 }, { wch: 8 }, { wch: 16 }, { wch: 20 }];
+  ws['!pageSetup'] = { fitToPage: true, fitToWidth: 1, fitToHeight: 0, orientation: 'landscape' };
+  XLSX.utils.book_append_sheet(wb, ws, whName.substring(0, 31));
+
+  const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+  const blob = new Blob([wbout], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  const filename = 'Результат_' + whName + '_' + date.replace(/\./g, '-') + '.xlsx';
+
+  toast('⏳ Відправляю в Telegram...');
+
+  try {
+    const form = new FormData();
+    form.append('chat_id', TG_CHAT_ID);
+    form.append('document', blob, filename);
+    form.append('caption', '📦 Результат прийому: ' + whName + '\nДата: ' + date + '\nЗамовлень: ' + allOrders.size + ', Факт: ' + totalFact);
+
+    const r = await fetch('https://api.telegram.org/bot' + TG_TOKEN + '/sendDocument', {
+      method: 'POST',
+      body: form
+    });
+    const data = await r.json();
+    if (data.ok) {
+      toast('✅ Файл відправлено в Telegram!');
+    } else {
+      toast('❌ Помилка Telegram: ' + (data.description || 'невідома'));
+    }
+  } catch(e) {
+    toast('❌ Помилка: ' + e.message);
+  }
 }
 
 // ======================== BEEP ========================
