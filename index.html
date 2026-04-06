@@ -700,7 +700,7 @@ loadScript3('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js
 <div class="container">
 
   <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:10px">
-    <p class="section-title" style="margin-bottom:0">Поточна сесія V4.18</p>
+    <p class="section-title" style="margin-bottom:0">Поточна сесія V4.19</p>
     <span id="session-date" style="font-size:12px;color:var(--accent);font-family:var(--mono)"></span>
   </div>
   <div class="card">
@@ -1876,26 +1876,38 @@ function exportXLSX() {
 
   XLSX.utils.book_append_sheet(wb, ws, whName.substring(0, 31));
 
-  // Also add a scans log sheet
-  if (state.scans.length) {
-    const scanRows = state.scans.map(s => ({
-      'Час': new Date(s.timestamp).toLocaleString('uk-UA'),
-      'Клієнт': s.client_name || '—',
-      '№ замовлення': s.order_number,
-      'Місце': s.paCode ? s.paCode : s.place ? (s.place + '/' + (s.total || '?')) : '—',
-      'Склад': getWhName(s.warehouse),
-      'Вручну': s.manual ? 'Так' : ''
-    })).reverse(); // newest first
-    const wsLog = XLSX.utils.json_to_sheet(scanRows);
-    wsLog['!cols'] = [
-      { wch: 20 }, { wch: 35 }, { wch: 18 }, { wch: 10 }, { wch: 14 }, { wch: 8 }
-    ];
-    XLSX.utils.book_append_sheet(wb, wsLog, 'Лог сканувань');
-  }
-
   // Fit to page width for printing
   ws['!pageSetup'] = { fitToPage: true, fitToWidth: 1, fitToHeight: 0, orientation: 'landscape', paperSize: 9 };
   ws['!margins'] = { left: 0.5, right: 0.5, top: 0.75, bottom: 0.75, header: 0.3, footer: 0.3 };
+
+  // Also add a scans log sheet (all warehouses, newest first)
+  if (state.scans.length) {
+    const scanRows = [...state.scans].reverse().map(s => {
+      // Extract PA code from rawQR if not stored directly
+      let place = '—';
+      if (s.paCode) place = s.paCode;
+      else if (s.rawQR) {
+        const pa = s.rawQR.match(/QR-([A-Z]{2}\d+)-QR-/i);
+        if (pa) place = pa[1];
+        else if (s.place) place = s.place + '/' + (s.total || '?');
+      } else if (s.place) {
+        place = s.place + '/' + (s.total || '?');
+      }
+      return {
+        'Час': new Date(s.timestamp).toLocaleString('uk-UA'),
+        'Клієнт': s.client_name || '—',
+        '№ замовлення': s.order_number,
+        'Місце': place,
+        'Склад': getWhName(s.warehouse),
+        'Вручну': s.manual ? 'Так' : ''
+      };
+    });
+    const wsLog = XLSX.utils.json_to_sheet(scanRows);
+    wsLog['!cols'] = [
+      { wch: 20 }, { wch: 35 }, { wch: 18 }, { wch: 12 }, { wch: 14 }, { wch: 8 }
+    ];
+    XLSX.utils.book_append_sheet(wb, wsLog, 'Лог сканувань');
+  }
 
   const filename = 'zvit_' + whName + '_' + date.replace(/\./g, '-') + '.xlsx';
   XLSX.writeFile(wb, filename, { cellStyles: true });
