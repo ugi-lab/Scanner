@@ -700,7 +700,7 @@ loadScript3('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js
 <div class="container">
 
   <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:10px">
-    <p class="section-title" style="margin-bottom:0">Поточна сесія V4.19</p>
+    <p class="section-title" style="margin-bottom:0">Поточна сесіяV4.20</p>
     <span id="session-date" style="font-size:12px;color:var(--accent);font-family:var(--mono)"></span>
   </div>
   <div class="card">
@@ -2581,6 +2581,32 @@ function buildReportBlob(whId) {
   ws['!cols'] = [{ wch: 35 }, { wch: 18 }, { wch: 12 }, { wch: 8 }, { wch: 16 }, { wch: 20 }];
   ws['!pageSetup'] = { fitToPage: true, fitToWidth: 1, fitToHeight: 0, orientation: 'landscape' };
   XLSX.utils.book_append_sheet(wb, ws, whName.substring(0, 31));
+
+  // Add scans log sheet for this warehouse
+  const whScans = state.scans.filter(s => s.warehouse === whId);
+  if (whScans.length) {
+    const scanRows = [...whScans].reverse().map(s => {
+      let place = '—';
+      if (s.paCode) place = s.paCode;
+      else if (s.rawQR) {
+        const pa = s.rawQR.match(/QR-([A-Z]{2}\d+)-QR-/i);
+        if (pa) place = pa[1];
+        else if (s.place) place = s.place + '/' + (s.total || '?');
+      } else if (s.place) {
+        place = s.place + '/' + (s.total || '?');
+      }
+      return {
+        'Час': new Date(s.timestamp).toLocaleString('uk-UA'),
+        'Клієнт': s.client_name || '—',
+        '№ замовлення': s.order_number,
+        'Місце': place,
+        'Вручну': s.manual ? 'Так' : ''
+      };
+    });
+    const wsLog = XLSX.utils.json_to_sheet(scanRows);
+    wsLog['!cols'] = [{ wch: 20 }, { wch: 35 }, { wch: 18 }, { wch: 12 }, { wch: 8 }];
+    XLSX.utils.book_append_sheet(wb, wsLog, 'Лог сканувань');
+  }
 
   const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
   return {
