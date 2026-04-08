@@ -1339,7 +1339,7 @@ function isDuplicate(parsed) {
   return null;
 }
 
-function processScan(raw, forced = false) {
+function processScan(raw, forced = false, isManual = false) {
   const parsed = parseQR(raw);
   if (!parsed) { toast('❌ Не вдалось розпізнати QR'); return; }
 
@@ -1394,7 +1394,7 @@ function processScan(raw, forced = false) {
     showStatus('red', '⚠️ Перевищення!', reg.client_name, order_number, fact, place, total, expected, null);
     beep('error');
     toast(`⚠️ Очікується ${expected}, вже ${fact}`);
-    recordScan(order_number, reg.client_name, reg.warehouse, place, total, false, expected, rawQR, paCode);
+    recordScan(order_number, reg.client_name, reg.warehouse, place, total, isManual, expected, rawQR, paCode);
     return;
   }
 
@@ -1416,12 +1416,16 @@ function processScan(raw, forced = false) {
   if (reg.delivery_city && reg.delivery_city.toUpperCase().includes('УЖГОРОД СКЛАД')) {
     deliveryInfo = { type: 'pickup', text: '🏠 САМОВИВІЗ' };
   } else if (reg.delivery_address && reg.delivery_address.trim()) {
-    deliveryInfo = { type: 'address', text: '📍 ' + reg.delivery_address };
+    const addr = reg.delivery_address.trim();
+    // Ignore if address is too short or contains only "вул" without actual street name
+    if (addr.length > 5 && !/^вул\.?\s*$/i.test(addr)) {
+      deliveryInfo = { type: 'address', text: '📍 ' + addr };
+    }
   }
 
   showStatus(color, label, reg.client_name, order_number, fact, place, total, expected, deliveryInfo);
   beep(isFirstForClient ? 'success' : 'info');
-  recordScan(order_number, reg.client_name, reg.warehouse, place, total, false, expected, rawQR, paCode);
+  recordScan(order_number, reg.client_name, reg.warehouse, place, total, isManual, expected, rawQR, paCode);
 
   // Two-address warning
   if (state.twoAddr.some(n => reg.client_name.toLowerCase().includes(n.toLowerCase()))) {
@@ -1593,7 +1597,7 @@ function manualScan() {
   const val = document.getElementById('manual-qr').value.trim();
   if (!val) return;
   hideSearchResults();
-  processScan(val);
+  processScan(val, false, true);
   document.getElementById('manual-qr').value = '';
 }
 
@@ -1646,7 +1650,7 @@ function selectSearchResult(order_number) {
   const input = document.getElementById('manual-qr');
   input.value = '';
   input.blur(); // hide keyboard
-  processScan(order_number);
+  processScan(order_number, false, true);
   // Scroll to top to show status block
   setTimeout(() => window.scrollTo({ top: 0, behavior: 'smooth' }), 100);
 }
