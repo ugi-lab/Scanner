@@ -700,7 +700,7 @@ loadScript3('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js
 <div class="container">
 
   <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:10px">
-    <p class="section-title" style="margin-bottom:0">Поточна сесія V4.21</p>
+    <p class="section-title" style="margin-bottom:0">Поточна сесія <span style="color:var(--text2);font-size:10px" id="app-version"></span></p>
     <span id="session-date" style="font-size:12px;color:var(--accent);font-family:var(--mono)"></span>
   </div>
   <div class="card">
@@ -779,6 +779,7 @@ loadScript3('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js
         <div class="count-lbl">МІСЦЕ</div>
       </div>
     </div>
+    <div id="delivery-info" style="display:none;margin-top:8px;padding:8px 12px;border-radius:8px;font-size:13px;font-weight:700"></div>
     <div class="warning-banner" id="warning-banner">
       <span>⚠️</span>
       <span>Клієнт має 2 адреси. Перевір бірку!</span>
@@ -965,6 +966,8 @@ const LS = {
   del: k => localStorage.removeItem(k)
 };
 
+const APP_VERSION = 'V4.22';
+
 let state = {
   registry: {}, // { warehouse: [ {order_number, client_name, expected_places} ] }
   scans: [],    // [ {order_number, client_name, warehouse, fact, place, total, manual, timestamp} ]
@@ -1057,7 +1060,7 @@ function importExcel(file, whId) {
         if (found) detectedWh = found.id;
       }
 
-      let colOrder = -1, colClient = -1, colPlaces = -1, colDelivery = -1, startIdx = -1;
+      let colOrder = -1, colClient = -1, colPlaces = -1, colDelivery = -1, colAddress = -1, startIdx = -1;
 
       // Strategy 1: named header row
       for (let i = 0; i < Math.min(rows.length, 25); i++) {
@@ -1068,6 +1071,7 @@ function importExcel(file, whId) {
           if (/клиент.назван|client.name|клієнт.назв/i.test(v)) colClient = j;
           if (/кол.?во.?мест|expected.?place|кількість/i.test(v)) colPlaces = j;
           if (/доставка.?город|delivery.?city/i.test(v)) colDelivery = j;
+          if (/доставка.?адрес|delivery.?addr/i.test(v)) colAddress = j;
         }
         if (colOrder >= 0 && colClient >= 0) { startIdx = i + 1; break; }
       }
@@ -1107,7 +1111,8 @@ function importExcel(file, whId) {
         const pv = parseFloat(String(row[colPlaces] || '1').replace(',', '.'));
         const expected = (Number.isInteger(pv) && pv > 0) ? pv : 1;
         const delivery = colDelivery >= 0 ? String(row[colDelivery] || '').trim() : '';
-        records.push({ order_number: orderNum, client_name: client, expected_places: expected, delivery_city: delivery });
+        const address = colAddress >= 0 ? String(row[colAddress] || '').trim() : '';
+        records.push({ order_number: orderNum, client_name: client, expected_places: expected, delivery_city: delivery, delivery_address: address });
       }
       // Extract date from header rows (look for pattern DD.MM.YY or DD.MM.YYYY)
       let fileDate = null;
@@ -1386,7 +1391,7 @@ function processScan(raw, forced = false) {
 
   // Check overcount
   if (expected && fact > expected) {
-    showStatus('red', '⚠️ Перевищення!', reg.client_name, order_number, fact, place, total, expected);
+    showStatus('red', '⚠️ Перевищення!', reg.client_name, order_number, fact, place, total, expected, null);
     beep('error');
     toast(`⚠️ Очікується ${expected}, вже ${fact}`);
     recordScan(order_number, reg.client_name, reg.warehouse, place, total, false, expected, rawQR, paCode);
@@ -1406,7 +1411,15 @@ function processScan(raw, forced = false) {
     color = 'blue';
     label = '🔵 +1 місце';
   }
-  showStatus(color, label, reg.client_name, order_number, fact, place, total, expected);
+  // Build delivery info
+  let deliveryInfo = null;
+  if (reg.delivery_city && reg.delivery_city.toUpperCase().includes('УЖГОРОД СКЛАД')) {
+    deliveryInfo = { type: 'pickup', text: '🏠 САМОВИВІЗ' };
+  } else if (reg.delivery_address && reg.delivery_address.trim()) {
+    deliveryInfo = { type: 'address', text: '📍 ' + reg.delivery_address };
+  }
+
+  showStatus(color, label, reg.client_name, order_number, fact, place, total, expected, deliveryInfo);
   beep(isFirstForClient ? 'success' : 'info');
   recordScan(order_number, reg.client_name, reg.warehouse, place, total, false, expected, rawQR, paCode);
 
@@ -1436,12 +1449,25 @@ function recordScan(order_number, client_name, warehouse, place, total, manual, 
   renderRecentScans();
 }
 
-function showStatus(color, label, clientName, orderNum, fact, place, total, expected) {
+function showStatus(color, label, clientName, orderNum, fact, place, total, expected, deliveryInfo) {
   const block = document.getElementById('status-block');
   block.className = 'status-block ' + color;
   document.getElementById('status-label').textContent = label;
   document.getElementById('client-name').textContent = clientName || '—';
   document.getElementById('order-num').textContent = orderNum || '';
+
+  // Show delivery info (самовивіз or address)
+  const di = document.getElementById('delivery-info');
+  if (deliveryInfo) {
+    di.style.display = 'block';
+    di.style.background = deliveryInfo.type === 'pickup'
+      ? 'rgba(255,149,0,0.15)' : 'rgba(0,153,255,0.12)';
+    di.style.color = deliveryInfo.type === 'pickup' ? 'var(--orange)' : 'var(--blue)';
+    di.style.border = '1px solid ' + (deliveryInfo.type === 'pickup' ? 'var(--orange)' : 'var(--blue)');
+    di.textContent = deliveryInfo.text;
+  } else {
+    di.style.display = 'none';
+  }
 
   const countRow = document.getElementById('count-row');
   if (fact !== null) {
@@ -1621,6 +1647,8 @@ function selectSearchResult(order_number) {
   input.value = '';
   input.blur(); // hide keyboard
   processScan(order_number);
+  // Scroll to top to show status block
+  setTimeout(() => window.scrollTo({ top: 0, behavior: 'smooth' }), 100);
 }
 
 document.getElementById('manual-qr').addEventListener('keydown', e => { if (e.key === 'Enter') manualScan(); });
@@ -1834,9 +1862,10 @@ function exportXLSX() {
   const wb = XLSX.utils.book_new();
 
   // Info sheet header rows then data
+  const regDate = state.registryDates[selectedReportWh] || '';
   const headerInfo = [
     ['Звіт прийому товару — ' + whName],
-    ['Дата: ' + date],
+    ['Дата звіту: ' + date + (regDate ? '   Реєстр від: ' + regDate : '')],
     ['Замовлень: ' + allOrders.size + '   Очікується: ' + totalExp + '   Факт: ' + totalFact],
     []
   ];
@@ -2570,9 +2599,10 @@ function buildReportBlob(whId) {
   });
 
   const wb = XLSX.utils.book_new();
+  const regDateB = state.registryDates[whId] || '';
   const headerInfo = [
     ['Звіт прийому товару — ' + whName],
-    ['Дата: ' + date],
+    ['Дата звіту: ' + date + (regDateB ? '   Реєстр від: ' + regDateB : '')],
     ['Замовлень: ' + allOrders.size + '   Очікується: ' + totalExp + '   Факт: ' + totalFact],
     []
   ];
@@ -2722,6 +2752,7 @@ function toast(msg) {
 
 // ======================== INIT ========================
 loadState();
+document.getElementById('app-version').textContent = APP_VERSION;
 updateImportStats();
 renderImportedList();
 renderRecentScans();
