@@ -931,12 +931,15 @@ loadScript3('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js
 <!-- MANUAL CLIENT MODAL -->
 <div class="modal-overlay" id="modal-manual">
   <div class="modal">
-    <div class="modal-title">⚠️ Замовлення не знайдено</div>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
+      <div class="modal-title" style="margin-bottom:0">⚠️ Замовлення не знайдено</div>
+      <button onclick="closeModal()" style="background:none;border:none;color:var(--text2);font-size:22px;cursor:pointer;line-height:1;padding:0 0 0 8px">✕</button>
+    </div>
     <div class="modal-sub" id="modal-order-num"></div>
-    <input type="text" id="modal-client-input" placeholder="Код або назва клієнта..." autocomplete="off" oninput="onClientSearch(this.value)">
-    <div id="modal-client-results" style="max-height:180px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;margin-top:6px;display:none"></div>
-    <div id="modal-client-selected" style="display:none;margin-top:6px;padding:8px 10px;background:rgba(0,212,170,0.1);border:1px solid var(--accent);border-radius:8px;font-size:13px;color:var(--accent)"></div>
-    <div class="modal-btns">
+    <input type="text" id="modal-client-input" placeholder="Введіть код або частину назви клієнта..." autocomplete="off" oninput="onClientSearch(this.value)">
+    <div id="modal-client-results" style="max-height:200px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;margin-top:4px;display:none;background:var(--surface2)"></div>
+    <div id="modal-client-selected" style="display:none;margin-top:8px;padding:8px 10px;background:rgba(0,212,170,0.1);border:1px solid var(--accent);border-radius:8px;font-size:13px;color:var(--accent)"></div>
+    <div class="modal-btns" style="margin-top:12px">
       <button class="btn btn-secondary" onclick="closeModal()">Скасувати</button>
       <button class="btn btn-primary" onclick="confirmManualClient()">Додати</button>
     </div>
@@ -946,7 +949,10 @@ loadScript3('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js
 <!-- DUPLICATE MODAL -->
 <div class="modal-overlay" id="modal-duplicate" style="display:none">
   <div class="modal">
-    <div class="modal-title">⛔ Можливий дубль</div>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
+      <div class="modal-title" style="margin-bottom:0">⛔ Можливий дубль</div>
+      <button onclick="closeDupModal()" style="background:none;border:none;color:var(--text2);font-size:22px;cursor:pointer;line-height:1;padding:0 0 0 8px">✕</button>
+    </div>
     <div class="modal-sub" id="modal-dup-text"></div>
     <div class="modal-btns">
       <button class="btn btn-secondary" onclick="closeDupModal()">Скасувати</button>
@@ -966,7 +972,7 @@ const LS = {
   del: k => localStorage.removeItem(k)
 };
 
-const APP_VERSION = 'V4.23';
+const APP_VERSION = 'V4.24';
 
 let state = {
   registry: {}, // { warehouse: [ {order_number, client_name, expected_places} ] }
@@ -1365,10 +1371,14 @@ function processScan(raw, forced = false, isManual = false) {
 
   const reg = findInRegistry(order_number);
   if (!reg) {
-    // Unknown order — auto-detect Center from QR format
+    // Unknown order — auto-detect warehouse from QR format
+    // Center format: QR-PA6711704-QR-S... 
+    // Other warehouses: LB15-S0075747151-1/1
     const isCenterQR = /^QR-/i.test(raw);
-    pendingQR = { order_number, place, total, rawQR, autoWarehouse: isCenterQR ? 'center' : null };
-    document.getElementById('modal-order-num').textContent = (isCenterQR ? '🏢 Центр · ' : '') + 'QR: ' + raw;
+    const autoWarehouse = isCenterQR ? 'center' : 'kyiv1';
+    pendingQR = { order_number, place, total, rawQR, autoWarehouse };
+    const whLabel = isCenterQR ? '🏢 Центр' : '🏭 Київ1';
+    document.getElementById('modal-order-num').textContent = whLabel + ' · QR: ' + raw;
     document.getElementById('modal-client-input').value = '';
     document.getElementById('modal-client-results').style.display = 'none';
     document.getElementById('modal-client-selected').style.display = 'none';
@@ -1662,10 +1672,12 @@ document.getElementById('manual-qr').addEventListener('blur', () => { setTimeout
 function closeModal() { document.getElementById('modal-manual').classList.remove('show'); pendingQR = null; }
 
 function confirmManualClient() {
-  const name = document.getElementById('modal-client-input').value.trim();
-  if (!name || !pendingQR) return;
+  if (!pendingQR) return;
+  // Get name: prefer selected from book, fallback to typed text
+  let name = document.getElementById('modal-client-input').value.trim();
+  if (!name) { toast('⚠️ Введіть назву клієнта'); return; }
   const { order_number, place, total, rawQR, autoWarehouse } = pendingQR;
-  const warehouse = autoWarehouse || 'manual';
+  const warehouse = autoWarehouse || 'kyiv1';
   const fact = getScanCount(order_number) + 1;
   showStatus('blue', '✏️ Додано вручну', name, order_number, fact, place, total, null);
   recordScan(order_number, name, warehouse, place, total, true, null, rawQR);
@@ -1803,6 +1815,66 @@ function renderReportTable() {
   `;
 }
 
+// Warehouses that show "Поза реєстром" block in reports
+const UNREG_REPORT_WHS = ['kyiv1', 'center'];
+
+function buildReportRows(whId) {
+  // Returns { mainRows, unregRows } arrays of plain objects for export
+  const rows = state.registry[whId] || [];
+  const whObj = state.warehouses.find(w => w.id === whId);
+  const isCenter = whObj && whObj.type === 'center';
+  const showUnreg = UNREG_REPORT_WHS.includes(whId);
+
+  const scans = state.scans.filter(s => s.warehouse === whId);
+  const scanMap = {};
+  scans.forEach(s => {
+    if (!scanMap[s.order_number]) scanMap[s.order_number] = { fact: 0, client_name: s.client_name, manual: s.manual };
+    scanMap[s.order_number].fact++;
+  });
+  // manual scans assigned to this warehouse
+  state.scans.filter(s => s.warehouse === 'manual').forEach(s => {
+    if (!rows.find(r => r.order_number === s.order_number) && s.manual) {
+      if (!scanMap[s.order_number]) scanMap[s.order_number] = { fact: 0, client_name: s.client_name, manual: true };
+      scanMap[s.order_number].fact++;
+    }
+  });
+
+  const allOrders = new Set([...rows.map(r => r.order_number), ...Object.keys(scanMap)]);
+  let totalExp = 0, totalFact = 0;
+  const mainRows = [], unregRows = [];
+
+  allOrders.forEach(ord => {
+    const reg = rows.find(r => r.order_number === ord);
+    const scan = scanMap[ord] || { fact: 0 };
+    const exp = reg ? (reg.expected_places || 0) : 0;
+    const fact = scan.fact;
+    totalExp += exp; totalFact += fact;
+
+    let status, isUnreg = false;
+    if (!reg) { status = 'Поза реєстром'; isUnreg = true; }
+    else if (fact === 0) status = 'Недопоставка';
+    else if (!isCenter && exp > 0 && fact < exp) status = 'Недопоставка';
+    else if (!isCenter && exp > 0 && fact > exp) status = 'Надлишок';
+    else status = 'OK';
+
+    const clientName = reg?.client_name || scan.client_name || '—';
+    const row = { clientName, ord, exp, fact, status, manual: scan.manual };
+
+    if (isUnreg && showUnreg) {
+      unregRows.push(row);
+    } else if (!isUnreg) {
+      mainRows.push(row);
+    }
+    // if isUnreg && !showUnreg — skip entirely
+  });
+
+  // Sort unregRows alphabetically
+  unregRows.sort((a, b) => a.clientName.localeCompare(b.clientName, 'uk'));
+
+  return { mainRows, unregRows, totalExp, totalFact, allOrders };
+}
+
+
 function exportXLSX() {
   if (!window.xlsxReady) {
     toast('⏳ XLSX-бібліотека завантажується, спробуй ще раз...');
@@ -1812,60 +1884,20 @@ function exportXLSX() {
   const whName = getWhName(selectedReportWh);
   const date = new Date().toLocaleDateString('uk-UA');
 
-  // Build data rows (same logic as renderReportTable)
-  const rows = state.registry[selectedReportWh] || [];
-  const scans = state.scans.filter(s => s.warehouse === selectedReportWh);
-  const scanMap = {};
-  scans.forEach(s => {
-    if (!scanMap[s.order_number]) scanMap[s.order_number] = { fact: 0, client_name: s.client_name, manual: s.manual };
-    scanMap[s.order_number].fact++;
-  });
-  state.scans.filter(s => s.warehouse === 'manual' || s.warehouse === selectedReportWh).forEach(s => {
-    if (!rows.find(r => r.order_number === s.order_number) && s.manual) {
-      if (!scanMap[s.order_number]) scanMap[s.order_number] = { fact: 0, client_name: s.client_name, manual: true };
-      scanMap[s.order_number].fact++;
-    }
+  const { mainRows, unregRows, totalExp, totalFact, allOrders } = buildReportRows(selectedReportWh);
+
+  const toXlsxRow = r => ({
+    'Клієнт': r.clientName,
+    '№ замовлення': r.ord,
+    'Очікується': r.exp || '',
+    'Факт': r.fact,
+    'Статус': r.status
   });
 
-  const allOrders = new Set([...rows.map(r => r.order_number), ...Object.keys(scanMap)]);
-  let totalExp = 0, totalFact = 0;
-
-  const dataRows = [];
-  allOrders.forEach(ord => {
-    const reg = rows.find(r => r.order_number === ord);
-    const scan = scanMap[ord] || { fact: 0 };
-    const exp = reg ? (reg.expected_places || 0) : 0;
-    const fact = scan.fact;
-    totalExp += exp;
-    totalFact += fact;
-
-    const whObjX = state.warehouses.find(w => w.id === selectedReportWh);
-    const isCenterX = whObjX && whObjX.type === 'center';
-    let status;
-    if (!reg) status = 'Поза реєстром';
-    else if (fact === 0) status = 'Недопоставка';
-    else if (!isCenterX && exp > 0 && fact < exp) status = 'Недопоставка';
-    else if (!isCenterX && exp > 0 && fact > exp) status = 'Надлишок';
-    else status = 'OK';
-
-    const clientName = reg?.client_name || scan.client_name || '—';
-    const notes = [];
-    if (state.twoAddr.some(n => clientName.toLowerCase().includes(n.toLowerCase()))) notes.push('2 адреси');
-    if (scan.manual) notes.push('Вручну');
-
-    dataRows.push({
-      'Клієнт': clientName,
-      '№ замовлення': ord,
-      'Очікується': exp || '',
-      'Факт': fact,
-      'Статус': status
-    });
-  });
+  const dataRows = mainRows.map(toXlsxRow);
 
   // Create workbook
   const wb = XLSX.utils.book_new();
-
-  // Info sheet header rows then data
   const regDate = state.registryDates[selectedReportWh] || '';
   const headerInfo = [
     ['Звіт прийому товару — ' + whName],
@@ -1874,49 +1906,26 @@ function exportXLSX() {
     []
   ];
   const ws = XLSX.utils.aoa_to_sheet(headerInfo);
-
-  // Append data table starting at row 5
   XLSX.utils.sheet_add_json(ws, dataRows, { origin: 'A5' });
 
-  // Column widths
-  ws['!cols'] = [
-    { wch: 35 }, // Клієнт
-    { wch: 18 }, // № замовлення
-    { wch: 12 }, // Очікується
-    { wch: 8  }, // Факт
-    { wch: 16 }  // Статус
-  ];
-
-  // Add borders to data rows (row 5 = table header + data rows below)
-  const borderStyle = {
-    top:    { style: 'thin', color: { rgb: 'BBBBBB' } },
-    bottom: { style: 'thin', color: { rgb: 'BBBBBB' } },
-    left:   { style: 'thin', color: { rgb: 'BBBBBB' } },
-    right:  { style: 'thin', color: { rgb: 'BBBBBB' } }
-  };
-  const cols = ['A','B','C','D','E','F'];
-  // Row 5 is table header (dataRows starts at row 6 = index 5 in 1-based)
-  // sheet_add_json writes header at row 5 (A5), data from A6
-  const totalDataRows = dataRows.length + 1; // +1 for header row of table
-  for (let r = 5; r <= 4 + totalDataRows; r++) {
-    cols.forEach(c => {
-      const cellRef = c + r;
-      if (!ws[cellRef]) ws[cellRef] = { t: 's', v: '' };
-      if (!ws[cellRef].s) ws[cellRef].s = {};
-      ws[cellRef].s.border = borderStyle;
-    });
+  // Add unregistered block if present (2 empty rows + header + data)
+  if (unregRows.length) {
+    const startUnreg = 5 + dataRows.length + 1 + 2; // after data table + 2 empty rows
+    XLSX.utils.sheet_add_aoa(ws, [[''], ['']], { origin: 'A' + (5 + dataRows.length + 1) });
+    XLSX.utils.sheet_add_aoa(ws, [['ПОЗА РЕЄСТРОМ (' + unregRows.length + '):']], { origin: 'A' + startUnreg });
+    XLSX.utils.sheet_add_json(ws, unregRows.map(toXlsxRow), { origin: 'A' + (startUnreg + 1) });
   }
 
+  ws['!cols'] = [
+    { wch: 35 }, { wch: 18 }, { wch: 12 }, { wch: 8 }, { wch: 16 }
+  ];
   XLSX.utils.book_append_sheet(wb, ws, whName.substring(0, 31));
-
-  // Fit to page width for printing
   ws['!pageSetup'] = { fitToPage: true, fitToWidth: 1, fitToHeight: 0, orientation: 'landscape', paperSize: 9 };
   ws['!margins'] = { left: 0.5, right: 0.5, top: 0.75, bottom: 0.75, header: 0.3, footer: 0.3 };
 
-  // Also add a scans log sheet (all warehouses, newest first)
+  // Add scans log sheet
   if (state.scans.length) {
     const scanRows = [...state.scans].reverse().map(s => {
-      // Extract PA code from rawQR if not stored directly
       let place = '—';
       if (s.paCode) place = s.paCode;
       else if (s.rawQR) {
@@ -1936,9 +1945,7 @@ function exportXLSX() {
       };
     });
     const wsLog = XLSX.utils.json_to_sheet(scanRows);
-    wsLog['!cols'] = [
-      { wch: 20 }, { wch: 35 }, { wch: 18 }, { wch: 12 }, { wch: 14 }, { wch: 8 }
-    ];
+    wsLog['!cols'] = [{ wch: 20 }, { wch: 35 }, { wch: 18 }, { wch: 12 }, { wch: 14 }, { wch: 8 }];
     XLSX.utils.book_append_sheet(wb, wsLog, 'Лог сканувань');
   }
 
@@ -1946,6 +1953,8 @@ function exportXLSX() {
   XLSX.writeFile(wb, filename, { cellStyles: true });
   toast('✅ Збережено: ' + filename);
 }
+
+
 
 function printReport() {
   if (!window.jsPDFReady) {
@@ -2499,21 +2508,29 @@ function updateClientBookStat() {
 }
 
 function onClientSearch(val) {
-  val = val.trim().toLowerCase();
+  val = val.trim();
   const results = document.getElementById('modal-client-results');
   const selected = document.getElementById('modal-client-selected');
   selected.style.display = 'none';
 
   if (!val || val.length < 1) { results.style.display = 'none'; return; }
-  if (!state.clientBook.length) { results.style.display = 'none'; return; }
 
+  // Search in client book
+  const valLow = val.toLowerCase();
   const matches = state.clientBook.filter(c =>
-    c.code.toLowerCase().includes(val) ||
-    c.name.toLowerCase().includes(val)
-  ).slice(0, 8);
+    c.code.toLowerCase().includes(valLow) ||
+    c.name.toLowerCase().includes(valLow)
+  ).slice(0, 10);
+
+  if (!state.clientBook.length) {
+    // No client book loaded — just allow manual input
+    results.style.display = 'none';
+    return;
+  }
 
   if (!matches.length) {
-    results.style.display = 'none';
+    results.style.display = 'block';
+    results.innerHTML = '<div style="padding:10px 12px;color:var(--text2);font-size:13px">Клієнта не знайдено — буде збережено введений текст</div>';
     return;
   }
 
@@ -2522,10 +2539,13 @@ function onClientSearch(val) {
   matches.forEach(c => {
     const el = document.createElement('div');
     el.style.cssText = 'padding:10px 12px;cursor:pointer;border-bottom:1px solid var(--border);display:flex;gap:10px;align-items:center';
-    el.innerHTML = '<span style="font-family:var(--mono);font-size:11px;color:var(--text2);min-width:40px">' + c.code + '</span>'
+    el.innerHTML = '<span style="font-family:var(--mono);font-size:11px;color:var(--accent);min-width:50px">' + c.code + '</span>'
       + '<span style="font-size:13px;font-weight:600">' + c.name + '</span>';
-    el.addEventListener('touchstart', () => el.style.background = 'var(--surface2)');
+    el.addEventListener('touchstart', () => el.style.background = 'var(--surface)');
     el.addEventListener('touchend', () => el.style.background = '');
+    el.addEventListener('mouseenter', () => el.style.background = 'var(--surface)');
+    el.addEventListener('mouseleave', () => el.style.background = '');
+    el.addEventListener('mousedown', e => e.preventDefault()); // prevent input blur
     el.addEventListener('click', () => selectClientFromBook(c));
     results.appendChild(el);
   });
@@ -2561,46 +2581,12 @@ async function sendToTelegram(blob, filename, caption) {
 function buildReportBlob(whId) {
   const whName = getWhName(whId);
   const date = new Date().toLocaleDateString('uk-UA');
-  const rows = state.registry[whId] || [];
-  const scans = state.scans.filter(s => s.warehouse === whId);
-  const scanMap = {};
-  scans.forEach(s => {
-    if (!scanMap[s.order_number]) scanMap[s.order_number] = { fact: 0, client_name: s.client_name, manual: s.manual };
-    scanMap[s.order_number].fact++;
-  });
-  state.scans.filter(s => s.warehouse === 'manual').forEach(s => {
-    if (!rows.find(r => r.order_number === s.order_number) && s.manual) {
-      if (!scanMap[s.order_number]) scanMap[s.order_number] = { fact: 0, client_name: s.client_name, manual: true };
-      scanMap[s.order_number].fact++;
-    }
-  });
 
-  const allOrders = new Set([...rows.map(r => r.order_number), ...Object.keys(scanMap)]);
+  const { mainRows, unregRows, totalExp, totalFact, allOrders } = buildReportRows(whId);
   if (!allOrders.size) return null;
 
-  let totalExp = 0, totalFact = 0;
-  const dataRows = [];
-  const whObj = state.warehouses.find(w => w.id === whId);
-  const isCenter = whObj && whObj.type === 'center';
-
-  allOrders.forEach(ord => {
-    const reg = rows.find(r => r.order_number === ord);
-    const scan = scanMap[ord] || { fact: 0 };
-    const exp = reg ? (reg.expected_places || 0) : 0;
-    const fact = scan.fact;
-    totalExp += exp; totalFact += fact;
-    let status;
-    if (!reg) status = 'Поза реєстром';
-    else if (fact === 0) status = 'Недопоставка';
-    else if (!isCenter && exp > 0 && fact < exp) status = 'Недопоставка';
-    else if (!isCenter && exp > 0 && fact > exp) status = 'Надлишок';
-    else status = 'OK';
-    const notes = [];
-    const clientName = reg?.client_name || scan.client_name || '—';
-    if (state.twoAddr.some(n => clientName.toLowerCase().includes(n.toLowerCase()))) notes.push('2 адреси');
-    if (scan.manual) notes.push('Вручну');
-    dataRows.push({ 'Клієнт': clientName, '№ замовлення': ord, 'Очікується': exp || '', 'Факт': fact, 'Статус': status });
-  });
+  const toXlsxRow = r => ({ 'Клієнт': r.clientName, '№ замовлення': r.ord, 'Очікується': r.exp || '', 'Факт': r.fact, 'Статус': r.status });
+  const dataRows = mainRows.map(toXlsxRow);
 
   const wb = XLSX.utils.book_new();
   const regDateB = state.registryDates[whId] || '';
@@ -2612,6 +2598,15 @@ function buildReportBlob(whId) {
   ];
   const ws = XLSX.utils.aoa_to_sheet(headerInfo);
   XLSX.utils.sheet_add_json(ws, dataRows, { origin: 'A5' });
+
+  // Add unregistered block if present
+  if (unregRows.length) {
+    const startUnreg = 5 + dataRows.length + 1 + 2;
+    XLSX.utils.sheet_add_aoa(ws, [[''], ['']], { origin: 'A' + (5 + dataRows.length + 1) });
+    XLSX.utils.sheet_add_aoa(ws, [['ПОЗА РЕЄСТРОМ (' + unregRows.length + '):']], { origin: 'A' + startUnreg });
+    XLSX.utils.sheet_add_json(ws, unregRows.map(toXlsxRow), { origin: 'A' + (startUnreg + 1) });
+  }
+
   ws['!cols'] = [{ wch: 35 }, { wch: 18 }, { wch: 12 }, { wch: 8 }, { wch: 16 }, { wch: 20 }];
   ws['!pageSetup'] = { fitToPage: true, fitToWidth: 1, fitToHeight: 0, orientation: 'landscape' };
   XLSX.utils.book_append_sheet(wb, ws, whName.substring(0, 31));
