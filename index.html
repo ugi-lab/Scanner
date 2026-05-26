@@ -1018,7 +1018,7 @@ const LS = {
   del: k => localStorage.removeItem(k)
 };
 
-const APP_VERSION = 'V4.29';
+const APP_VERSION = 'V4.30';
 
 let state = {
   registry: {}, // { warehouse: [ {order_number, client_name, expected_places} ] }
@@ -1664,6 +1664,11 @@ function manualScan() {
 
 function showNumpad() {
   document.getElementById('numpad-wrap').style.display = 'block';
+  // Scroll so numpad + results are visible
+  setTimeout(() => {
+    const numpad = document.getElementById('numpad-wrap');
+    numpad.scrollIntoView({ behavior: 'smooth', block: 'end' });
+  }, 80);
 }
 
 function hideNumpad() {
@@ -1672,6 +1677,8 @@ function hideNumpad() {
   inp.setAttribute('readonly', '');
   inp.setAttribute('inputmode', 'none');
   inp.blur();
+  // Scroll back to top to show status block
+  window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
 function numpadPress(digit) {
@@ -1739,15 +1746,18 @@ function onManualInput(val) {
       <div style="font-family:var(--mono);font-size:12px;color:var(--accent)">→</div>
     </div>
   `).join('');
+  // Scroll so results are visible above numpad
+  setTimeout(() => {
+    el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }, 50);
 }
 
 function selectSearchResult(order_number) {
   hideSearchResults();
+  hideNumpad();
   const input = document.getElementById('manual-qr');
   input.value = '';
-  input.blur(); // hide keyboard
   processScan(order_number, false, true);
-  // Scroll to top to show status block
   setTimeout(() => window.scrollTo({ top: 0, behavior: 'smooth' }), 100);
 }
 
