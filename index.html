@@ -966,7 +966,7 @@ const LS = {
   del: k => localStorage.removeItem(k)
 };
 
-const APP_VERSION = 'V4.26';
+const APP_VERSION = 'V4.27';
 
 let state = {
   registry: {}, // { warehouse: [ {order_number, client_name, expected_places} ] }
@@ -1196,6 +1196,12 @@ function importCSVBuffer(buffer, whId, filename) {
 }
 
 function extractOrderNum(raw) { const m = String(raw || '').match(/S\d{10}/i); return m ? m[0].toUpperCase() : null; }
+
+// Format order number with space before last 4 digits: S006086 0945
+function fmtOrder(ord) {
+  if (!ord) return ord;
+  return ord.slice(0, -4) + ' ' + ord.slice(-4);
+}
 
 function applyRecords(records, whId, filename, fileDate) {
   if (!records.length) { toast('⚠️ Не знайдено записів: ' + filename); return; }
@@ -1495,7 +1501,7 @@ function renderRecentScans() {
       <span class="scan-item-icon">${s.manual ? '✏️' : '📦'}</span>
       <div style="flex:1">
         <div class="scan-item-name">${s.client_name || '—'}</div>
-        <div class="scan-item-order">${s.order_number}</div>
+        <div class="scan-item-order">${fmtOrder(s.order_number)}</div>
       </div>
       <div class="scan-item-count">${s.paCode ? s.paCode : s.place ? s.place+'/'+(s.total||'?') : '—'}</div>
     </div>`;
@@ -1640,7 +1646,7 @@ function onManualInput(val) {
          ontouchend="this.style.background=''">
       <div style="flex:1">
         <div style="font-weight:700;font-size:14px;text-transform:uppercase">${r.client_name}</div>
-        <div style="font-family:var(--mono);font-size:11px;color:var(--text2);margin-top:2px">${r.order_number} · ${getWhName(r.warehouse)}</div>
+        <div style="font-family:var(--mono);font-size:11px;color:var(--text2);margin-top:2px">${fmtOrder(r.order_number)} · ${getWhName(r.warehouse)}</div>
       </div>
       <div style="font-family:var(--mono);font-size:12px;color:var(--accent)">→</div>
     </div>
@@ -1738,7 +1744,7 @@ function renderClients() {
     return `<div class="client-row ${cls}">
       <div class="client-row-info">
         <div class="client-row-name">${c.client_name}${twoAddr ? '<span class="two-addr-badge">2 адр.</span>' : ''}</div>
-        <div class="client-row-order">${c.order_number} · ${getWhName(c.warehouse)}</div>
+        <div class="client-row-order">${fmtOrder(c.order_number)} · ${getWhName(c.warehouse)}</div>
       </div>
       <div class="client-row-count">${fact}/${exp || '?'}</div>
     </div>`;
@@ -1816,7 +1822,7 @@ function renderReportTable() {
 
     tableRows.push(`<tr>
       <td>${clientName}${twoAddr ? ' <span class="two-addr-badge">2 адр.</span>' : ''}</td>
-      <td style="font-family:var(--mono);font-size:11px">${ord}</td>
+      <td style="font-family:var(--mono);font-size:11px">${fmtOrder(ord)}</td>
       <td>${exp || '—'}</td>
       <td>${fact}</td>
       <td><span class="status-pill ${statusCls}">${statusTxt}</span></td>
@@ -1857,7 +1863,7 @@ function exportXLSX() {
     else if (!isCenter && exp > 0 && fact < exp) status = 'Недопоставка';
     else if (!isCenter && exp > 0 && fact > exp) status = 'Надлишок';
     else status = 'OK';
-    dataRows.push({ 'Клієнт': reg?.client_name || scan.client_name || '—', '№ замовлення': ord, 'Очікується': exp || '', 'Факт': fact, 'Статус': status });
+    dataRows.push({ 'Клієнт': reg?.client_name || scan.client_name || '—', '№ замовлення': fmtOrder(ord), 'Очікується': exp || '', 'Факт': fact, 'Статус': status });
   });
 
   const wb = XLSX.utils.book_new();
@@ -1881,7 +1887,7 @@ function exportXLSX() {
       if (s.paCode) place = s.paCode;
       else if (s.rawQR) { const pa = s.rawQR.match(/QR-([A-Z]{2}\d+)-QR-/i); if (pa) place = pa[1]; else if (s.place) place = s.place + '/' + (s.total || '?'); }
       else if (s.place) place = s.place + '/' + (s.total || '?');
-      return { 'Час': new Date(s.timestamp).toLocaleString('uk-UA'), 'Клієнт': s.client_name || '—', '№ замовлення': s.order_number, 'Місце': place, 'Склад': getWhName(s.warehouse), 'Вручну': s.manual ? 'Так' : '' };
+      return { 'Час': new Date(s.timestamp).toLocaleString('uk-UA'), 'Клієнт': s.client_name || '—', '№ замовлення': fmtOrder(s.order_number), 'Місце': place, 'Склад': getWhName(s.warehouse), 'Вручну': s.manual ? 'Так' : '' };
     });
     const wsLog = XLSX.utils.json_to_sheet(scanRows);
     wsLog['!cols'] = [{ wch: 20 }, { wch: 35 }, { wch: 18 }, { wch: 12 }, { wch: 14 }, { wch: 8 }];
@@ -2363,7 +2369,7 @@ async function exportToDrive() {
     else if (!isCenterD && exp > 0 && fact < exp) status = 'Недопоставка';
     else if (!isCenterD && exp > 0 && fact > exp) status = 'Надлишок';
     else status = 'OK';
-    dataRows.push({ 'Клієнт': reg?.client_name || scan.client_name || '—', '№ замовлення': ord, 'Очікується': exp || '', 'Факт': fact, 'Статус': status });
+    dataRows.push({ 'Клієнт': reg?.client_name || scan.client_name || '—', '№ замовлення': fmtOrder(ord), 'Очікується': exp || '', 'Факт': fact, 'Статус': status });
   });
 
   const wb = XLSX.utils.book_new();
@@ -2529,7 +2535,7 @@ function buildReportBlob(whId) {
     else if (!isCenter && exp > 0 && fact < exp) status = 'Недопоставка';
     else if (!isCenter && exp > 0 && fact > exp) status = 'Надлишок';
     else status = 'OK';
-    dataRows.push({ 'Клієнт': reg?.client_name || scan.client_name || '—', '№ замовлення': ord, 'Очікується': exp || '', 'Факт': fact, 'Статус': status });
+    dataRows.push({ 'Клієнт': reg?.client_name || scan.client_name || '—', '№ замовлення': fmtOrder(ord), 'Очікується': exp || '', 'Факт': fact, 'Статус': status });
   });
 
   const wb = XLSX.utils.book_new();
@@ -2553,7 +2559,7 @@ function buildReportBlob(whId) {
       if (s.paCode) place = s.paCode;
       else if (s.rawQR) { const pa = s.rawQR.match(/QR-([A-Z]{2}\d+)-QR-/i); if (pa) place = pa[1]; else if (s.place) place = s.place + '/' + (s.total || '?'); }
       else if (s.place) place = s.place + '/' + (s.total || '?');
-      return { 'Час': new Date(s.timestamp).toLocaleString('uk-UA'), 'Клієнт': s.client_name || '—', '№ замовлення': s.order_number, 'Місце': place, 'Вручну': s.manual ? 'Так' : '' };
+      return { 'Час': new Date(s.timestamp).toLocaleString('uk-UA'), 'Клієнт': s.client_name || '—', '№ замовлення': fmtOrder(s.order_number), 'Місце': place, 'Вручну': s.manual ? 'Так' : '' };
     });
     const wsLog = XLSX.utils.json_to_sheet(scanRows);
     wsLog['!cols'] = [{ wch: 20 }, { wch: 35 }, { wch: 18 }, { wch: 12 }, { wch: 8 }];
