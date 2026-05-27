@@ -291,6 +291,17 @@ loadScript3('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js
   .blue .status-dot { background: var(--blue); box-shadow: 0 0 8px var(--blue); }
   .red .status-dot { background: var(--red); box-shadow: 0 0 8px var(--red); }
   .orange .status-dot { background: var(--orange); box-shadow: 0 0 8px var(--orange); }
+  /* === INVOICE STATUS COLORS === */
+  .status-block.yellow { background: rgba(255,214,10,0.12); border-color: #FFD60A; }
+  .yellow .status-dot  { background: #FFD60A; box-shadow: 0 0 8px #FFD60A; }
+  .yellow .status-label { color: #FFD60A; }
+  .scan-item.yellow    { border-left-color: #FFD60A; }
+
+  @keyframes barcodeSwipe {
+    0%,100% { top: 10%; }
+    50%     { top: 80%; }
+  }
+
   .idle .status-dot { background: var(--text2); }
 
   .status-label { font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text2); }
@@ -747,6 +758,7 @@ loadScript3('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js
     <button class="nav-tab" onclick="showPage('clients')">Клієнти</button>
     <button class="nav-tab" onclick="showPage('report')">Звіт</button>
     <button class="nav-tab" onclick="showPage('settings')">⚙</button>
+    <button class="nav-tab" onclick="showPage('invoices')">Накл.</button>
   </div>
 </nav>
 
@@ -1005,6 +1017,102 @@ loadScript3('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js
 </div>
 </div>
 
+
+<!-- ======================== INVOICES PAGE ======================== -->
+<div id="page-invoices" class="page">
+<div class="container">
+
+  <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:10px">
+    <p class="section-title" style="margin-bottom:0">Сортування накладних</p>
+    <span id="inv-registry-hint" style="font-size:11px;color:var(--text2)"></span>
+  </div>
+
+  <!-- Status block (reuses same classes as main scanner) -->
+  <div class="status-block idle" id="inv-status-block">
+    <div class="status-indicator">
+      <div class="status-dot"></div>
+      <div class="status-label" id="inv-status-label">Очікування сканування</div>
+    </div>
+    <div class="client-name" id="inv-client-name" style="text-transform:uppercase;letter-spacing:0.03em">—</div>
+    <div class="order-num" id="inv-invoice-num"></div>
+    <div class="count-row" id="inv-count-row" style="display:none">
+      <div class="count-box">
+        <div class="count-num" id="inv-count-got">0</div>
+        <div class="count-lbl">ЗІБРАНО</div>
+      </div>
+      <div class="count-sep">/</div>
+      <div class="count-box">
+        <div class="count-num" id="inv-count-total">?</div>
+        <div class="count-lbl">ВСЬОГО</div>
+      </div>
+      <div class="count-box" id="inv-remain-box">
+        <div class="count-num" id="inv-remain-num" style="color:var(--orange)">0</div>
+        <div class="count-lbl">ЗАЛИШИЛОСЬ</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Stats row -->
+  <div class="stats-grid" style="margin-bottom:12px">
+    <div class="stat-box">
+      <div class="stat-val" id="inv-stat-total">0</div>
+      <div class="stat-lbl">Накладних</div>
+    </div>
+    <div class="stat-box">
+      <div class="stat-val" id="inv-stat-scanned">0</div>
+      <div class="stat-lbl">Відскановано</div>
+    </div>
+    <div class="stat-box">
+      <div class="stat-val" id="inv-stat-done">0</div>
+      <div class="stat-lbl">Клієнтів ✓</div>
+    </div>
+  </div>
+
+  <!-- Camera buttons -->
+  <div class="cam-btns">
+    <button class="btn btn-primary" id="inv-btn-start" onclick="startInvCamera()" style="flex:2">▶ Камера</button>
+    <button class="btn btn-secondary" id="inv-btn-stop" onclick="stopInvCamera()" style="flex:1;display:none">⏹ Стоп</button>
+    <button class="btn btn-secondary" onclick="flipInvCamera()" id="inv-btn-flip" style="display:none">🔄</button>
+  </div>
+
+  <!-- Camera -->
+  <div class="camera-wrap" id="inv-camera-wrap">
+    <video id="invVideo" autoplay playsinline muted></video>
+    <canvas id="invCanvas" style="display:none"></canvas>
+    <div class="camera-overlay">
+      <div class="camera-placeholder" id="inv-cam-placeholder">
+        <div class="cam-icon">📋</div>
+        <div id="inv-cam-msg">Наведи камеру на штрихкод</div>
+      </div>
+      <!-- Horizontal barcode frame -->
+      <div id="inv-scan-frame" style="display:none;position:relative;width:290px;height:90px">
+        <div style="position:absolute;top:0;left:0;width:22px;height:22px;border-top:3px solid var(--accent);border-left:3px solid var(--accent)"></div>
+        <div style="position:absolute;top:0;right:0;width:22px;height:22px;border-top:3px solid var(--accent);border-right:3px solid var(--accent)"></div>
+        <div style="position:absolute;bottom:0;left:0;width:22px;height:22px;border-bottom:3px solid var(--accent);border-left:3px solid var(--accent)"></div>
+        <div style="position:absolute;bottom:0;right:0;width:22px;height:22px;border-bottom:3px solid var(--accent);border-right:3px solid var(--accent)"></div>
+        <div style="position:absolute;left:0;right:0;height:2px;background:linear-gradient(90deg,transparent,var(--accent),transparent);top:50%;animation:barcodeSwipe 1.5s ease-in-out infinite"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Input (works with USB/BT barcode scanners — auto Enter) -->
+  <div class="manual-row">
+    <input type="text" id="inv-manual" placeholder="SI номер або штрихкод..."
+           autocomplete="off" style="font-size:14px"
+           onkeydown="if(event.key==='Enter'){invManualScan();event.preventDefault();}">
+    <button class="btn btn-secondary" onclick="invManualScan()">✓</button>
+  </div>
+  <div style="font-size:11px;color:var(--text2);margin:-6px 0 12px;text-align:center">
+    Поле автоматично приймає введення від сканера штрихкодів
+  </div>
+
+  <!-- Recent scans -->
+  <p class="section-title">Останні сканування</p>
+  <div id="inv-recent-scans"></div>
+
+</div>
+</div>
+
 <!-- MANUAL CLIENT MODAL -->
 <div class="modal-overlay" id="modal-manual">
   <div class="modal">
@@ -1050,6 +1158,17 @@ loadScript3('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js
   </div>
 </div>
 
+<!-- INVOICE COMPLETE MODAL -->
+<div class="modal-overlay" id="modal-inv-complete" style="display:none">
+  <div class="modal" style="text-align:center;border-color:var(--accent);background:rgba(0,212,170,0.08)">
+    <div style="font-size:52px;margin-bottom:6px">✅</div>
+    <div class="modal-title" style="font-size:20px;color:var(--accent);margin-bottom:10px">Всі накладні зібрано!</div>
+    <div id="modal-inv-client" style="font-size:20px;font-weight:800;margin:10px 0;text-transform:uppercase;line-height:1.2"></div>
+    <div id="modal-inv-summary" style="font-size:13px;color:var(--text2);margin-bottom:18px"></div>
+    <button class="btn btn-primary btn-full" style="font-size:16px;padding:14px" onclick="closeInvCompleteModal()">OK ✓</button>
+  </div>
+</div>
+
 <!-- DUPLICATE MODAL -->
 <div class="modal-overlay" id="modal-duplicate" style="display:none">
   <div class="modal">
@@ -1073,7 +1192,7 @@ const LS = {
   del: k => localStorage.removeItem(k)
 };
 
-const APP_VERSION = 'V4.33';
+const APP_VERSION = 'V5.1';
 
 let state = {
   registry: {}, // { warehouse: [ {order_number, client_name, expected_places} ] }
@@ -1082,6 +1201,8 @@ let state = {
   twoAddr: [],
   registryDates: {}, // { warehouse: 'DD.MM.YYYY' }
   clientBook: [], // [ {code, name} ] loaded from Клієнти.xlsx
+  invoices: {},      // { warehouse: [{invoice_number, order_number, client_name}] }
+  invoiceScans: [],  // [{invoice_number, client_name, order_number, warehouse, timestamp}]
   colMap: { order: ['order_number','номер замовлення','order','замовлення'], client: ['client_name','клієнт','client','name','ім\'я'], places: ['expected_places','місця','qty','кількість','places'] },
 };
 
@@ -1099,6 +1220,8 @@ function loadState() {
   state.twoAddr = LS.get('twoAddr') || [];
   state.registryDates = LS.get('registryDates') || {};
   state.clientBook = LS.get('clientBook') || [];
+  state.invoices = LS.get('invoices') || {};
+  state.invoiceScans = LS.get('invoiceScans') || [];
   const savedColMap = LS.get('colMap');
   if (savedColMap) state.colMap = savedColMap;
 }
@@ -1111,6 +1234,8 @@ function saveState() {
   LS.set('colMap', state.colMap);
   LS.set('registryDates', state.registryDates);
   LS.set('clientBook', state.clientBook);
+  LS.set('invoices', state.invoices);
+  LS.set('invoiceScans', state.invoiceScans);
 }
 
 // ======================== PAGE NAV ========================
@@ -1119,7 +1244,7 @@ function showPage(id) {
   document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
   document.getElementById('page-' + id).classList.add('active');
   const tabs = document.querySelectorAll('.nav-tab');
-  const pages = ['import','scan','clients','report','settings'];
+  const pages = ['import','scan','clients','report','settings','invoices'];
   const idx = pages.indexOf(id);
   if (idx >= 0) tabs[idx].classList.add('active');
 
@@ -1127,6 +1252,7 @@ function showPage(id) {
   if (id === 'clients') renderClients();
   if (id === 'report') renderReport();
   if (id === 'settings') renderSettings();
+  if (id === 'invoices') { updateInvStats(); renderInvRecentScans(); }
 }
 
 // ======================== FILE IMPORT ========================
@@ -1167,7 +1293,7 @@ function importExcel(file, whId) {
         if (found) detectedWh = found.id;
       }
 
-      let colOrder = -1, colClient = -1, colPlaces = -1, colDelivery = -1, colAddress = -1, startIdx = -1;
+      let colOrder = -1, colClient = -1, colPlaces = -1, colDelivery = -1, colAddress = -1, colSI = -1, startIdx = -1;
 
       // Strategy 1: named header row
       for (let i = 0; i < Math.min(rows.length, 25); i++) {
@@ -1179,6 +1305,7 @@ function importExcel(file, whId) {
           if (/кол.?во.?мест|expected.?place|кількість/i.test(v)) colPlaces = j;
           if (/доставка.?город|delivery.?city/i.test(v)) colDelivery = j;
           if (/доставка.?адрес|delivery.?addr/i.test(v)) colAddress = j;
+          if (/счет.?продажи|рахунок.?продажи|invoice.?num|si.?num/i.test(v)) colSI = j;
         }
         if (colOrder >= 0 && colClient >= 0) { startIdx = i + 1; break; }
       }
@@ -1209,6 +1336,17 @@ function importExcel(file, whId) {
 
       if (startIdx < 0) { toast('❌ Не вдалось розпізнати структуру: ' + file.name); return; }
 
+      // Auto-detect SI column: scan first data rows for ^SI\d{8,}$ value
+      if (colSI < 0) {
+        for (let di = startIdx; di < Math.min(rows.length, startIdx + 10); di++) {
+          const drow = rows[di];
+          for (let dj = 0; dj < drow.length; dj++) {
+            if (/^SI\d{8,}$/i.test(String(drow[dj] || '').trim())) { colSI = dj; break; }
+          }
+          if (colSI >= 0) break;
+        }
+      }
+
       const records = [];
       for (let i = startIdx; i < rows.length; i++) {
         const row = rows[i];
@@ -1219,7 +1357,9 @@ function importExcel(file, whId) {
         const expected = (Number.isInteger(pv) && pv > 0) ? pv : 1;
         const delivery = colDelivery >= 0 ? String(row[colDelivery] || '').trim() : '';
         const address = colAddress >= 0 ? String(row[colAddress] || '').trim() : '';
-        records.push({ order_number: orderNum, client_name: client, expected_places: expected, delivery_city: delivery, delivery_address: address });
+        const rawSIval = colSI >= 0 ? String(row[colSI] || '').trim() : '';
+        const invoiceNum = /^SI\d{8,}$/i.test(rawSIval) ? rawSIval.toUpperCase() : null;
+        records.push({ order_number: orderNum, client_name: client, expected_places: expected, delivery_city: delivery, delivery_address: address, invoice_number: invoiceNum });
       }
       // Extract date from header rows (look for pattern DD.MM.YY or DD.MM.YYYY)
       let fileDate = null;
@@ -1252,7 +1392,7 @@ function importCSVBuffer(buffer, whId, filename) {
 
   const lines = text.split(/\r?\n/);
   const delim = ';';
-  let colOrder = -1, colClient = -1, colPlaces = -1, startIdx = -1;
+  let colOrder = -1, colClient = -1, colPlaces = -1, colSI = -1, startIdx = -1;
   const oSyn = state.colMap.order.map(s => s.toLowerCase());
   const cSyn = state.colMap.client.map(s => s.toLowerCase());
   const pSyn = state.colMap.places.map(s => s.toLowerCase());
@@ -1263,7 +1403,8 @@ function importCSVBuffer(buffer, whId, filename) {
     const oi = cells.findIndex(c => oSyn.some(s => c.includes(s)));
     const ci = cells.findIndex(c => cSyn.some(s => c.includes(s)));
     const pi = cells.findIndex(c => pSyn.some(s => c.includes(s)));
-    if (oi >= 0 && ci >= 0) { colOrder = oi; colClient = ci; colPlaces = pi; startIdx = i + 1; break; }
+    const sii = cells.findIndex(c => /счет.?продажи|рахунок.?продажи|si.?num/i.test(c));
+    if (oi >= 0 && ci >= 0) { colOrder = oi; colClient = ci; colPlaces = pi; if (sii >= 0) colSI = sii; startIdx = i + 1; break; }
   }
 
   // Strategy 2: find S\d{10}
@@ -1289,6 +1430,17 @@ function importCSVBuffer(buffer, whId, filename) {
 
   if (startIdx < 0) { toast('❌ Не вдалось розпізнати: ' + filename); return; }
 
+  // Auto-detect SI column in CSV
+  if (colSI < 0) {
+    for (let di = startIdx; di < Math.min(lines.length, startIdx + 10); di++) {
+      const dcells = lines[di].split(delim);
+      for (let dj = 0; dj < dcells.length; dj++) {
+        if (/^SI\d{8,}$/i.test(dcells[dj].trim())) { colSI = dj; break; }
+      }
+      if (colSI >= 0) break;
+    }
+  }
+
   const records = [];
   for (let i = startIdx; i < lines.length; i++) {
     const cells = lines[i].split(delim);
@@ -1297,7 +1449,9 @@ function importCSVBuffer(buffer, whId, filename) {
     const client = (cells[colClient] || '').trim() || 'Невідомо';
     const pv = parseFloat((cells[colPlaces] || '1').trim().replace(',', '.'));
     const expected = (!isNaN(pv) && Number.isInteger(pv) && pv > 0) ? pv : 1;
-    records.push({ order_number: orderNum, client_name: client, expected_places: expected });
+    const rawSIcsv = colSI >= 0 ? (cells[colSI] || '').trim() : '';
+    const invoiceNumCsv = /^SI\d{8,}$/i.test(rawSIcsv) ? rawSIcsv.toUpperCase() : null;
+    records.push({ order_number: orderNum, client_name: client, expected_places: expected, invoice_number: invoiceNumCsv });
   }
   applyRecords(records, whId, filename);
 }
@@ -1315,12 +1469,30 @@ function applyRecords(records, whId, filename, fileDate) {
   if (!state.registry[whId]) state.registry[whId] = [];
   const existing = new Set(state.registry[whId].map(r => r.order_number));
   let added = 0;
-  records.forEach(r => { if (!existing.has(r.order_number)) { state.registry[whId].push(r); added++; } });
+  records.forEach(r => {
+    if (!existing.has(r.order_number)) { state.registry[whId].push(r); added++; existing.add(r.order_number); }
+  });
+
+  // Extract invoices from ALL rows (even order_number dupes — each row = one invoice)
+  if (!state.invoices[whId]) state.invoices[whId] = [];
+  const existingInv = new Set(state.invoices[whId].map(r => r.invoice_number));
+  let invAdded = 0;
+  records.forEach(r => {
+    if (r.invoice_number && !existingInv.has(r.invoice_number)) {
+      state.invoices[whId].push({ invoice_number: r.invoice_number, order_number: r.order_number, client_name: r.client_name });
+      existingInv.add(r.invoice_number);
+      invAdded++;
+    }
+  });
+
   if (fileDate) state.registryDates[whId] = fileDate;
   saveState(); updateImportStats(); renderImportedList(); checkDateConsistency();
   const whName = getWhName(whId);
   const places = records.reduce((s,r) => s + (r.expected_places||0), 0);
-  toast(`✅ ${whName}: ${added} замовлень, ${places} місць` + (fileDate ? ` (${fileDate})` : ''));
+  let tMsg = `✅ ${whName}: ${added} замовлень, ${places} місць`;
+  if (invAdded > 0) tMsg += `, ${invAdded} накладних`;
+  if (fileDate) tMsg += ` (${fileDate})`;
+  toast(tMsg);
 }
 
 function checkDateConsistency() {
@@ -2295,9 +2467,13 @@ function clearSession() {
   state.registry = {};
   state.scans = [];
   state.registryDates = {};
+  state.invoices = {};
+  state.invoiceScans = [];
   LS.del('registry');
   LS.del('scans');
   LS.del('registryDates');
+  LS.del('invoices');
+  LS.del('invoiceScans');
   document.getElementById('session-date').textContent = '';
   document.getElementById('date-warning').style.display = 'none';
   stopCamera();
@@ -2880,6 +3056,285 @@ function toast(msg) {
   el.classList.add('show');
   clearTimeout(el._t);
   el._t = setTimeout(() => el.classList.remove('show'), 2500);
+}
+
+
+// ======================== INVOICE SCANNER ========================
+// Registry stores: SI0066406572 (no prefix)
+// Barcode on paper: B1-SI0066406572 (may have prefix)
+// We extract SI\d+ part from whatever is scanned.
+
+let invStream = null, invScanTimer = null, invCameraFacing = 'environment';
+let invBarcodeDetector = null;
+let invScanBlockedUntil = 0, invLastScanned = '', invLastScannedTime = 0;
+
+function invBlockScanning(ms) { invScanBlockedUntil = Date.now() + (ms || 2000); }
+
+// Normalise: extract "SI" + digits, strip any prefix (e.g. "B1-")
+function extractSINumber(raw) {
+  const m = (raw || '').match(/SI\d{8,}/i);
+  return m ? m[0].toUpperCase() : null;
+}
+
+function findInvoice(siNum) {
+  for (const [wh, rows] of Object.entries(state.invoices)) {
+    const inv = rows.find(r => r.invoice_number === siNum);
+    if (inv) return { ...inv, warehouse: wh };
+  }
+  return null;
+}
+
+function getAllClientInvoices(clientName) {
+  const name = clientName.toLowerCase().trim();
+  const result = [];
+  Object.entries(state.invoices).forEach(([wh, rows]) => {
+    rows.forEach(r => { if (r.client_name.toLowerCase().trim() === name) result.push({ ...r, warehouse: wh }); });
+  });
+  return result;
+}
+
+function getScannedClientInvoices(clientName) {
+  const name = clientName.toLowerCase().trim();
+  return state.invoiceScans.filter(s => s.client_name.toLowerCase().trim() === name);
+}
+
+function processInvoiceScan(raw, forced) {
+  raw = (raw || '').trim();
+  if (!raw) return;
+
+  const siNum = extractSINumber(raw);
+  if (!siNum) {
+    beep('error');
+    showInvStatus('red', '❌ Невідомий формат', raw, null, null, null);
+    toast('❌ Не розпізнано: немає SI номера');
+    invBlockScanning(1500);
+    return;
+  }
+
+  // Duplicate check
+  if (!forced) {
+    const dup = state.invoiceScans.find(s => s.invoice_number === siNum);
+    if (dup) {
+      beep('error');
+      const t = dup.timestamp ? new Date(dup.timestamp).toLocaleTimeString('uk-UA',{hour:'2-digit',minute:'2-digit'}) : '';
+      showInvStatus('red', '⛔ Вже відскановано' + (t ? ' о ' + t : ''), dup.client_name, siNum, null, null);
+      toast('⛔ Накладна вже відскановано');
+      invBlockScanning(3000);
+      return;
+    }
+  }
+
+  // Lookup
+  const inv = findInvoice(siNum);
+  if (!inv) {
+    beep('error');
+    showInvStatus('red', '❌ Не знайдено в реєстрі', siNum, null, null, null);
+    toast('❌ ' + siNum + ' — не знайдена');
+    invBlockScanning(1500);
+    return;
+  }
+
+  const allClientInv = getAllClientInvoices(inv.client_name);
+  const total = allClientInv.length;
+
+  // Record
+  state.invoiceScans.push({
+    invoice_number: siNum,
+    client_name: inv.client_name,
+    order_number: inv.order_number,
+    warehouse: inv.warehouse,
+    timestamp: Date.now()
+  });
+  saveState();
+
+  const scanned = getScannedClientInvoices(inv.client_name).length;
+  const remaining = total - scanned;
+
+  updateInvStats();
+  renderInvRecentScans();
+  invBlockScanning(1500);
+  invLastScanned = siNum;
+
+  if (total === 1) {
+    beep('success');
+    showInvStatus('yellow', '🟡 Єдина накладна — відкласти', inv.client_name, siNum, 1, 1);
+  } else if (scanned >= total) {
+    beep('success'); setTimeout(() => beep('success'), 180); setTimeout(() => beep('success'), 360);
+    showInvStatus('green', '✅ Всі накладні зібрано!', inv.client_name, siNum, scanned, total);
+    showInvCompleteModal(inv.client_name, total);
+  } else {
+    beep(scanned === 1 ? 'success' : 'info');
+    const lbl = scanned === 1
+      ? `🟢 Перша з ${total} — ще ${remaining} у купку`
+      : `🔵 Накладна ${scanned} з ${total} — ще ${remaining}`;
+    showInvStatus(scanned === 1 ? 'green' : 'blue', lbl, inv.client_name, siNum, scanned, total);
+  }
+}
+
+function showInvStatus(color, label, clientName, siNum, scanned, total) {
+  const block = document.getElementById('inv-status-block');
+  block.className = 'status-block ' + (color || 'idle');
+  document.getElementById('inv-status-label').textContent = label || '';
+  document.getElementById('inv-client-name').textContent = clientName || '—';
+  document.getElementById('inv-invoice-num').textContent = siNum || '';
+
+  const cr = document.getElementById('inv-count-row');
+  const rb = document.getElementById('inv-remain-box');
+  if (scanned != null && total != null) {
+    cr.style.display = 'flex';
+    document.getElementById('inv-count-got').textContent = scanned;
+    document.getElementById('inv-count-total').textContent = total;
+    const rem = total - scanned;
+    if (rem > 0 && total > 1) { rb.style.display = 'block'; document.getElementById('inv-remain-num').textContent = rem; }
+    else rb.style.display = 'none';
+  } else {
+    cr.style.display = 'none';
+  }
+}
+
+function showInvCompleteModal(clientName, total) {
+  document.getElementById('modal-inv-client').textContent = clientName;
+  const w = total < 2 ? 'накладна' : total < 5 ? 'накладні' : 'накладних';
+  document.getElementById('modal-inv-summary').textContent = 'Всі ' + total + ' ' + w + ' зібрано ✓';
+  document.getElementById('modal-inv-complete').style.display = 'flex';
+  invBlockScanning(30000);
+}
+
+function closeInvCompleteModal() {
+  document.getElementById('modal-inv-complete').style.display = 'none';
+  invBlockScanning(1500);
+  invLastScanned = '';
+}
+
+function invManualScan() {
+  const inp = document.getElementById('inv-manual');
+  const val = inp.value.trim();
+  if (!val) return;
+  inp.value = '';
+  processInvoiceScan(val);
+}
+
+function updateInvStats() {
+  let totalInv = 0;
+  Object.values(state.invoices).forEach(rows => totalInv += rows.length);
+  document.getElementById('inv-stat-total').textContent = totalInv;
+  document.getElementById('inv-stat-scanned').textContent = state.invoiceScans.length;
+
+  // Clients with all invoices done
+  const clientTotals = {};
+  Object.values(state.invoices).forEach(rows => {
+    rows.forEach(r => { const n = r.client_name.toLowerCase().trim(); clientTotals[n] = (clientTotals[n]||0)+1; });
+  });
+  const clientScanned = {};
+  state.invoiceScans.forEach(s => { const n = s.client_name.toLowerCase().trim(); clientScanned[n] = (clientScanned[n]||0)+1; });
+  let done = 0;
+  Object.entries(clientTotals).forEach(([n,t]) => { if ((clientScanned[n]||0) >= t) done++; });
+  document.getElementById('inv-stat-done').textContent = done;
+
+  // Registry hint
+  const hint = document.getElementById('inv-registry-hint');
+  if (hint) hint.textContent = totalInv > 0 ? Object.keys(state.invoices).map(wh => getWhName(wh) + ': ' + (state.invoices[wh]||[]).length).join(' · ') : '';
+}
+
+function renderInvRecentScans() {
+  const el = document.getElementById('inv-recent-scans');
+  const recent = [...state.invoiceScans].reverse().slice(0, 8);
+  if (!recent.length) {
+    el.innerHTML = '<div style="color:var(--text2);font-size:13px;text-align:center;padding:16px">Ще немає сканувань</div>';
+    return;
+  }
+  el.innerHTML = recent.map(s => {
+    const allInv = getAllClientInvoices(s.client_name);
+    const scInv = getScannedClientInvoices(s.client_name);
+    const t = allInv.length, sc = scInv.length;
+    const color = t === 1 ? 'yellow' : sc >= t ? 'green' : 'blue';
+    return `<div class="scan-item ${color}">
+      <span class="scan-item-icon">📋</span>
+      <div style="flex:1">
+        <div class="scan-item-name">${s.client_name||'—'}</div>
+        <div class="scan-item-order">${s.invoice_number}</div>
+      </div>
+      <div class="scan-item-count" style="font-family:var(--mono);font-size:12px">${sc}/${t}</div>
+    </div>`;
+  }).join('');
+}
+
+// ─── Camera (BarcodeDetector API — Chrome/Android) ───────────────────────
+async function startInvCamera() {
+  try {
+    if (invStream) stopInvCamera();
+    invStream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: invCameraFacing }, width: { ideal: 1280 }, height: { ideal: 720 } }
+    });
+    const video = document.getElementById('invVideo');
+    video.srcObject = invStream;
+    await video.play();
+    document.getElementById('inv-cam-placeholder').style.display = 'none';
+    document.getElementById('inv-scan-frame').style.display = 'block';
+    document.getElementById('inv-btn-start').style.display = 'none';
+    document.getElementById('inv-btn-stop').style.display = '';
+    document.getElementById('inv-btn-flip').style.display = '';
+
+    if ('BarcodeDetector' in window) {
+      invBarcodeDetector = new BarcodeDetector({ formats: ['code_128','code_39','code_93','codabar','itf'] });
+      invScanTimer = setInterval(invScanLoop, 300);
+    } else {
+      document.getElementById('inv-cam-placeholder').style.display = 'flex';
+      document.getElementById('inv-scan-frame').style.display = 'none';
+      document.getElementById('inv-cam-msg').textContent = '⚠️ Автосканування недоступне у цьому браузері. Використовуй USB/BT сканер або ввід вручну.';
+      stopInvCamera();
+    }
+  } catch(e) { toast('❌ Камера: ' + e.message); }
+}
+
+function stopInvCamera() {
+  if (invScanTimer) { clearInterval(invScanTimer); invScanTimer = null; }
+  if (invStream) { invStream.getTracks().forEach(t => t.stop()); invStream = null; }
+  const video = document.getElementById('invVideo');
+  if (video) video.srcObject = null;
+  document.getElementById('inv-cam-placeholder').style.display = 'flex';
+  document.getElementById('inv-scan-frame').style.display = 'none';
+  document.getElementById('inv-btn-start').style.display = '';
+  document.getElementById('inv-btn-stop').style.display = 'none';
+  document.getElementById('inv-btn-flip').style.display = 'none';
+  invBarcodeDetector = null;
+}
+
+function flipInvCamera() {
+  invCameraFacing = invCameraFacing === 'environment' ? 'user' : 'environment';
+  startInvCamera();
+}
+
+async function invScanLoop() {
+  if (!invBarcodeDetector || !invStream) return;
+  if (Date.now() < invScanBlockedUntil) return;
+  const video = document.getElementById('invVideo');
+  if (!video || video.readyState < 2 || video.videoWidth === 0) return;
+
+  // Same crop zone as QR scanner: 55% width × 50% height, centred
+  const canvas = document.getElementById('invCanvas');
+  const fullW = video.videoWidth, fullH = video.videoHeight;
+  const cropW = Math.floor(fullW * 0.55);
+  const cropH = Math.floor(fullH * 0.50);
+  const cropX = Math.floor((fullW - cropW) / 2);
+  const cropY = Math.floor((fullH - cropH) / 2);
+  canvas.width = cropW;
+  canvas.height = cropH;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(video, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
+
+  try {
+    const barcodes = await invBarcodeDetector.detect(canvas);
+    if (barcodes && barcodes.length) {
+      const code = barcodes[0].rawValue;
+      const now = Date.now();
+      if (code !== invLastScanned || now - invLastScannedTime > 1500) {
+        invLastScanned = code;
+        invLastScannedTime = now;
+        processInvoiceScan(code);
+      }
+    }
+  } catch(e) {}
 }
 
 // ======================== INIT ========================
