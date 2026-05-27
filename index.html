@@ -985,10 +985,36 @@ loadScript3('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js
   <div class="modal">
     <div class="modal-title">⚠️ Замовлення не знайдено</div>
     <div class="modal-sub" id="modal-order-num"></div>
-    <input type="text" id="modal-client-input" placeholder="Код або назва клієнта..." autocomplete="off" oninput="onClientSearch(this.value)">
-    <div id="modal-client-results" style="max-height:180px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;margin-top:6px;display:none"></div>
+    <input type="text" id="modal-client-input"
+           placeholder="Код або назва клієнта..."
+           autocomplete="off"
+           readonly
+           inputmode="none"
+           style="font-size:16px"
+           onfocus="showModalNumpad()"
+           oninput="onClientSearch(this.value)">
+    <div id="modal-client-results" style="max-height:180px;overflow-y:auto;border:2px solid #FFD60A;border-radius:8px;margin-top:6px;display:none;box-shadow:0 0 10px rgba(255,214,10,0.2)"></div>
     <div id="modal-client-selected" style="display:none;margin-top:6px;padding:8px 10px;background:rgba(0,212,170,0.1);border:1px solid var(--accent);border-radius:8px;font-size:13px;color:var(--accent)"></div>
-    <div class="modal-btns">
+
+    <!-- Modal Numpad -->
+    <div id="modal-numpad-wrap" style="display:none;margin-top:8px">
+      <div class="numpad" onmousedown="event.preventDefault()">
+        <button class="numpad-btn" onclick="modalNumpadPress('1')">1</button>
+        <button class="numpad-btn" onclick="modalNumpadPress('2')">2</button>
+        <button class="numpad-btn" onclick="modalNumpadPress('3')">3</button>
+        <button class="numpad-btn" onclick="modalNumpadPress('4')">4</button>
+        <button class="numpad-btn" onclick="modalNumpadPress('5')">5</button>
+        <button class="numpad-btn" onclick="modalNumpadPress('6')">6</button>
+        <button class="numpad-btn" onclick="modalNumpadPress('7')">7</button>
+        <button class="numpad-btn" onclick="modalNumpadPress('8')">8</button>
+        <button class="numpad-btn" onclick="modalNumpadPress('9')">9</button>
+        <button class="numpad-btn kbd" onclick="switchModalToKeyboard()">АБВ</button>
+        <button class="numpad-btn" onclick="modalNumpadPress('0')">0</button>
+        <button class="numpad-btn del" onclick="modalNumpadDel()">⌫</button>
+      </div>
+    </div>
+
+    <div class="modal-btns" style="margin-top:12px">
       <button class="btn btn-secondary" onclick="closeModal()">Скасувати</button>
       <button class="btn btn-primary" onclick="confirmManualClient()">Додати</button>
     </div>
@@ -1018,7 +1044,7 @@ const LS = {
   del: k => localStorage.removeItem(k)
 };
 
-const APP_VERSION = 'V4.30';
+const APP_VERSION = 'V4.31';
 
 let state = {
   registry: {}, // { warehouse: [ {order_number, client_name, expected_places} ] }
@@ -1432,6 +1458,7 @@ function processScan(raw, forced = false, isManual = false) {
     document.getElementById('modal-client-results').style.display = 'none';
     document.getElementById('modal-client-selected').style.display = 'none';
     document.getElementById('modal-manual').classList.add('show');
+    setTimeout(() => showModalNumpad(), 50);
     showStatus('red', '❌ Не в реєстрі', order_number, null, null, place, total);
     beep('error');
     blockScanning(30000); // block until user dismisses modal
@@ -1775,8 +1802,12 @@ document.getElementById('manual-qr').addEventListener('blur', () => {
 // ======================== MODAL ========================
 function closeModal() {
   document.getElementById('modal-manual').classList.remove('show');
+  hideModalNumpad();
+  document.getElementById('modal-client-input').value = '';
+  document.getElementById('modal-client-results').style.display = 'none';
+  document.getElementById('modal-client-selected').style.display = 'none';
   pendingQR = null;
-  blockScanning(1500); // short pause after closing
+  blockScanning(1500);
   lastScanned = '';
 }
 
@@ -1795,11 +1826,47 @@ function confirmDupScan() {
   if (dup) processScan(dup.raw, true);
 }
 
+function showModalNumpad() {
+  document.getElementById('modal-numpad-wrap').style.display = 'block';
+}
+
+function hideModalNumpad() {
+  document.getElementById('modal-numpad-wrap').style.display = 'none';
+  const inp = document.getElementById('modal-client-input');
+  inp.setAttribute('readonly', '');
+  inp.setAttribute('inputmode', 'none');
+  inp.blur();
+}
+
+function modalNumpadPress(digit) {
+  const inp = document.getElementById('modal-client-input');
+  inp.value += digit;
+  onClientSearch(inp.value);
+}
+
+function modalNumpadDel() {
+  const inp = document.getElementById('modal-client-input');
+  inp.value = inp.value.slice(0, -1);
+  onClientSearch(inp.value);
+  if (!inp.value) {
+    document.getElementById('modal-client-results').style.display = 'none';
+  }
+}
+
+function switchModalToKeyboard() {
+  const inp = document.getElementById('modal-client-input');
+  inp.removeAttribute('readonly');
+  inp.setAttribute('inputmode', 'text');
+  inp.setAttribute('lang', 'en');
+  inp.focus();
+  document.getElementById('modal-numpad-wrap').style.display = 'none';
+}
+
+
 function confirmManualClient() {
   const name = document.getElementById('modal-client-input').value.trim();
   if (!name || !pendingQR) return;
   const { order_number, place, total, rawQR, autoWarehouse } = pendingQR;
-  // Always assign to a real warehouse — detect by QR format if not set
   const isCenterQR = /^QR-/i.test(rawQR || '');
   const warehouse = autoWarehouse || (isCenterQR ? 'center' : 'kyiv1');
   const fact = getScanCount(order_number) + 1;
@@ -2579,11 +2646,12 @@ function onClientSearch(val) {
   results.innerHTML = '';
   matches.forEach(c => {
     const el = document.createElement('div');
-    el.style.cssText = 'padding:10px 12px;cursor:pointer;border-bottom:1px solid var(--border);display:flex;gap:10px;align-items:center';
-    el.innerHTML = '<span style="font-family:var(--mono);font-size:11px;color:var(--text2);min-width:40px">' + c.code + '</span>'
-      + '<span style="font-size:13px;font-weight:600">' + c.name + '</span>';
+    el.style.cssText = 'padding:12px;cursor:pointer;border-bottom:1px solid var(--border);display:flex;gap:10px;align-items:center';
+    el.innerHTML = '<span style="font-family:var(--mono);font-size:13px;color:var(--accent);min-width:50px">' + c.code + '</span>'
+      + '<span style="font-size:16px;font-weight:600">' + c.name + '</span>';
     el.addEventListener('touchstart', () => el.style.background = 'var(--surface2)');
     el.addEventListener('touchend', () => el.style.background = '');
+    el.addEventListener('mousedown', e => e.preventDefault());
     el.addEventListener('click', () => selectClientFromBook(c));
     results.appendChild(el);
   });
@@ -2591,10 +2659,11 @@ function onClientSearch(val) {
 
 function selectClientFromBook(c) {
   document.getElementById('modal-client-input').value = c.name;
-  document.getElementById('modal-client-input').blur();
+  hideModalNumpad();
   document.getElementById('modal-client-results').style.display = 'none';
   const sel = document.getElementById('modal-client-selected');
   sel.style.display = 'block';
+  sel.style.fontSize = '15px';
   sel.textContent = '✓ ' + c.code + ' — ' + c.name;
 }
 
