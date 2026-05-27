@@ -374,8 +374,8 @@ loadScript3('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js
     justify-content: center;
   }
   .scan-frame {
-    width: 200px;
-    height: 200px;
+    width: 55%;
+    height: 50%;
     position: relative;
   }
   .scan-frame::before, .scan-frame::after,
@@ -1192,7 +1192,7 @@ const LS = {
   del: k => localStorage.removeItem(k)
 };
 
-const APP_VERSION = 'V5.1';
+const APP_VERSION = 'V5.2';
 
 let state = {
   registry: {}, // { warehouse: [ {order_number, client_name, expected_places} ] }
