@@ -633,6 +633,11 @@ loadScript3('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js
     padding: 20px;
   }
   .modal-overlay.show { display: flex; }
+  /* Modal pinned to top — for numpad modal so keyboard stays fixed */
+  .modal-overlay.show.modal-top {
+    align-items: flex-start;
+    padding-top: 16px;
+  }
   .modal {
     background: var(--surface);
     border: 1px solid var(--border);
@@ -981,7 +986,7 @@ loadScript3('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js
 </div>
 
 <!-- MANUAL CLIENT MODAL -->
-<div class="modal-overlay" id="modal-manual">
+<div class="modal-overlay modal-top" id="modal-manual">
   <div class="modal">
     <div class="modal-title">⚠️ Замовлення не знайдено</div>
     <div class="modal-sub" id="modal-order-num"></div>
@@ -1044,7 +1049,7 @@ const LS = {
   del: k => localStorage.removeItem(k)
 };
 
-const APP_VERSION = 'V4.31';
+const APP_VERSION = 'V4.32';
 
 let state = {
   registry: {}, // { warehouse: [ {order_number, client_name, expected_places} ] }
