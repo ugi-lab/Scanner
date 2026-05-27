@@ -633,10 +633,30 @@ loadScript3('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js
     padding: 20px;
   }
   .modal-overlay.show { display: flex; }
-  /* Modal pinned to top — for numpad modal so keyboard stays fixed */
-  .modal-overlay.show.modal-top {
-    align-items: flex-start;
-    padding-top: 16px;
+  /* Modal-manual: full screen, numpad fixed at bottom */
+  #modal-manual {
+    align-items: stretch;
+    justify-content: flex-start;
+    padding: 0;
+  }
+  #modal-manual .modal {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    max-width: 100%;
+    height: 100%;
+    border-radius: 0;
+    padding: 16px;
+    overflow: hidden;
+  }
+  #modal-manual .modal-body-scroll {
+    flex: 1;
+    overflow-y: auto;
+    min-height: 0;
+  }
+  #modal-manual .modal-footer {
+    flex-shrink: 0;
+    padding-top: 8px;
   }
   .modal {
     background: var(--surface);
@@ -986,42 +1006,46 @@ loadScript3('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js
 </div>
 
 <!-- MANUAL CLIENT MODAL -->
-<div class="modal-overlay modal-top" id="modal-manual">
+<div class="modal-overlay" id="modal-manual">
   <div class="modal">
-    <div class="modal-title">⚠️ Замовлення не знайдено</div>
-    <div class="modal-sub" id="modal-order-num"></div>
-    <input type="text" id="modal-client-input"
-           placeholder="Код або назва клієнта..."
-           autocomplete="off"
-           readonly
-           inputmode="none"
-           style="font-size:16px"
-           onfocus="showModalNumpad()"
-           oninput="onClientSearch(this.value)">
-    <div id="modal-client-results" style="max-height:180px;overflow-y:auto;border:2px solid #FFD60A;border-radius:8px;margin-top:6px;display:none;box-shadow:0 0 10px rgba(255,214,10,0.2)"></div>
-    <div id="modal-client-selected" style="display:none;margin-top:6px;padding:8px 10px;background:rgba(0,212,170,0.1);border:1px solid var(--accent);border-radius:8px;font-size:13px;color:var(--accent)"></div>
-
-    <!-- Modal Numpad -->
-    <div id="modal-numpad-wrap" style="display:none;margin-top:8px">
-      <div class="numpad" onmousedown="event.preventDefault()">
-        <button class="numpad-btn" onclick="modalNumpadPress('1')">1</button>
-        <button class="numpad-btn" onclick="modalNumpadPress('2')">2</button>
-        <button class="numpad-btn" onclick="modalNumpadPress('3')">3</button>
-        <button class="numpad-btn" onclick="modalNumpadPress('4')">4</button>
-        <button class="numpad-btn" onclick="modalNumpadPress('5')">5</button>
-        <button class="numpad-btn" onclick="modalNumpadPress('6')">6</button>
-        <button class="numpad-btn" onclick="modalNumpadPress('7')">7</button>
-        <button class="numpad-btn" onclick="modalNumpadPress('8')">8</button>
-        <button class="numpad-btn" onclick="modalNumpadPress('9')">9</button>
-        <button class="numpad-btn kbd" onclick="switchModalToKeyboard()">АБВ</button>
-        <button class="numpad-btn" onclick="modalNumpadPress('0')">0</button>
-        <button class="numpad-btn del" onclick="modalNumpadDel()">⌫</button>
-      </div>
+    <!-- Scrollable top: title + input + results -->
+    <div class="modal-body-scroll">
+      <div class="modal-title">⚠️ Замовлення не знайдено</div>
+      <div class="modal-sub" id="modal-order-num"></div>
+      <input type="text" id="modal-client-input"
+             placeholder="Код або назва клієнта..."
+             autocomplete="off"
+             readonly
+             inputmode="none"
+             style="font-size:16px"
+             onfocus="showModalNumpad()"
+             oninput="onClientSearch(this.value)">
+      <div id="modal-client-results" style="overflow-y:auto;border:2px solid #FFD60A;border-radius:8px;margin-top:6px;display:none;box-shadow:0 0 10px rgba(255,214,10,0.2)"></div>
+      <div id="modal-client-selected" style="display:none;margin-top:6px;padding:8px 10px;background:rgba(0,212,170,0.1);border:1px solid var(--accent);border-radius:8px;font-size:15px;color:var(--accent)"></div>
     </div>
 
-    <div class="modal-btns" style="margin-top:12px">
-      <button class="btn btn-secondary" onclick="closeModal()">Скасувати</button>
-      <button class="btn btn-primary" onclick="confirmManualClient()">Додати</button>
+    <!-- Fixed footer: numpad + buttons -->
+    <div class="modal-footer">
+      <div id="modal-numpad-wrap" style="display:none;margin-bottom:10px">
+        <div class="numpad" onmousedown="event.preventDefault()">
+          <button class="numpad-btn" onclick="modalNumpadPress('1')">1</button>
+          <button class="numpad-btn" onclick="modalNumpadPress('2')">2</button>
+          <button class="numpad-btn" onclick="modalNumpadPress('3')">3</button>
+          <button class="numpad-btn" onclick="modalNumpadPress('4')">4</button>
+          <button class="numpad-btn" onclick="modalNumpadPress('5')">5</button>
+          <button class="numpad-btn" onclick="modalNumpadPress('6')">6</button>
+          <button class="numpad-btn" onclick="modalNumpadPress('7')">7</button>
+          <button class="numpad-btn" onclick="modalNumpadPress('8')">8</button>
+          <button class="numpad-btn" onclick="modalNumpadPress('9')">9</button>
+          <button class="numpad-btn kbd" onclick="switchModalToKeyboard()">АБВ</button>
+          <button class="numpad-btn" onclick="modalNumpadPress('0')">0</button>
+          <button class="numpad-btn del" onclick="modalNumpadDel()">⌫</button>
+        </div>
+      </div>
+      <div class="modal-btns">
+        <button class="btn btn-secondary" onclick="closeModal()">Скасувати</button>
+        <button class="btn btn-primary" onclick="confirmManualClient()">Додати</button>
+      </div>
     </div>
   </div>
 </div>
@@ -1049,7 +1073,7 @@ const LS = {
   del: k => localStorage.removeItem(k)
 };
 
-const APP_VERSION = 'V4.32';
+const APP_VERSION = 'V4.33';
 
 let state = {
   registry: {}, // { warehouse: [ {order_number, client_name, expected_places} ] }
