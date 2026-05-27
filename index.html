@@ -1192,7 +1192,7 @@ const LS = {
   del: k => localStorage.removeItem(k)
 };
 
-const APP_VERSION = 'V5.2';
+const APP_VERSION = 'V5.3';
 
 let state = {
   registry: {}, // { warehouse: [ {order_number, client_name, expected_places} ] }
@@ -1847,6 +1847,28 @@ function blockScanning(ms = 2500) {
   scanBlockedUntil = Date.now() + ms;
 }
 
+
+// ── Crop helper: maps visual frame (fractionW × fractionH of container)
+//    to raw video coordinates, accounting for object-fit:cover transform.
+//    Without this, the visual frame and actual scan zone are offset.
+function getScanCrop(video, fractionW, fractionH) {
+  const cW = video.offsetWidth  || video.clientWidth  || 380;
+  const cH = video.offsetHeight || video.clientHeight || 240;
+  const vW = video.videoWidth;
+  const vH = video.videoHeight;
+  // object-fit:cover scale = largest scale that fills the container
+  const scale = Math.max(cW / vW, cH / vH);
+  // how many raw pixels are hidden on each side
+  const offX = (vW - cW / scale) / 2;
+  const offY = (vH - cH / scale) / 2;
+  // visual frame starts at (1-fW)/2 * cW in container coords
+  const cropW = Math.floor(cW * fractionW / scale);
+  const cropH = Math.floor(cH * fractionH / scale);
+  const cropX = Math.floor(offX + cW * (1 - fractionW) / 2 / scale);
+  const cropY = Math.floor(offY + cH * (1 - fractionH) / 2 / scale);
+  return { cropX, cropY, cropW, cropH };
+}
+
 function scanLoop() {
   const video  = document.getElementById('qrVideo');
   const canvas = document.getElementById('qrCanvas');
@@ -1856,12 +1878,7 @@ function scanLoop() {
   // Check global block (after successful scan / modal shown)
   if (Date.now() < scanBlockedUntil) return;
 
-  const fullW = video.videoWidth;
-  const fullH = video.videoHeight;
-  const cropW = Math.floor(fullW * 0.55);
-  const cropH = Math.floor(fullH * 0.50);
-  const cropX = Math.floor((fullW - cropW) / 2);
-  const cropY = Math.floor((fullH - cropH) / 2);
+  const { cropX, cropY, cropW, cropH } = getScanCrop(video, 0.55, 0.50);
   canvas.width  = cropW;
   canvas.height = cropH;
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
@@ -3311,13 +3328,8 @@ async function invScanLoop() {
   const video = document.getElementById('invVideo');
   if (!video || video.readyState < 2 || video.videoWidth === 0) return;
 
-  // Same crop zone as QR scanner: 55% width × 50% height, centred
   const canvas = document.getElementById('invCanvas');
-  const fullW = video.videoWidth, fullH = video.videoHeight;
-  const cropW = Math.floor(fullW * 0.55);
-  const cropH = Math.floor(fullH * 0.50);
-  const cropX = Math.floor((fullW - cropW) / 2);
-  const cropY = Math.floor((fullH - cropH) / 2);
+  const { cropX, cropY, cropW, cropH } = getScanCrop(video, 0.55, 0.50);
   canvas.width = cropW;
   canvas.height = cropH;
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
