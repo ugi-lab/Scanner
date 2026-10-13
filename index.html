@@ -366,6 +366,7 @@ loadScript3('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js
   }
   #qrVideo { width: 100%; height: 100%; object-fit: cover; display: block; }
   #qrCanvas { display: none; }
+  #invVideo { width: 100%; height: 100%; object-fit: cover; display: block; }
   .camera-overlay {
     position: absolute;
     inset: 0;
@@ -1085,7 +1086,7 @@ loadScript3('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js
         <div id="inv-cam-msg">Наведи камеру на штрихкод</div>
       </div>
       <!-- Horizontal barcode frame -->
-      <div id="inv-scan-frame" style="display:none;position:relative;width:290px;height:90px">
+      <div id="inv-scan-frame" style="display:none;position:relative;width:80%;height:40%">
         <div style="position:absolute;top:0;left:0;width:22px;height:22px;border-top:3px solid var(--accent);border-left:3px solid var(--accent)"></div>
         <div style="position:absolute;top:0;right:0;width:22px;height:22px;border-top:3px solid var(--accent);border-right:3px solid var(--accent)"></div>
         <div style="position:absolute;bottom:0;left:0;width:22px;height:22px;border-bottom:3px solid var(--accent);border-left:3px solid var(--accent)"></div>
@@ -1192,7 +1193,7 @@ const LS = {
   del: k => localStorage.removeItem(k)
 };
 
-const APP_VERSION = 'V5.3';
+const APP_VERSION = 'V5.4';
 
 let state = {
   registry: {}, // { warehouse: [ {order_number, client_name, expected_places} ] }
@@ -3277,11 +3278,13 @@ function renderInvRecentScans() {
 }
 
 // ─── Camera (BarcodeDetector API — Chrome/Android) ───────────────────────
+// Scan zone as fraction of the visible camera window. MUST match #inv-scan-frame size.
+const INV_ZONE_W = 0.80, INV_ZONE_H = 0.40;
 async function startInvCamera() {
   try {
     if (invStream) stopInvCamera();
     invStream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: { ideal: invCameraFacing }, width: { ideal: 1280 }, height: { ideal: 720 } }
+      video: { facingMode: { ideal: invCameraFacing }, width: { ideal: 1920 }, height: { ideal: 1080 } }
     });
     const video = document.getElementById('invVideo');
     video.srcObject = invStream;
@@ -3293,7 +3296,7 @@ async function startInvCamera() {
     document.getElementById('inv-btn-flip').style.display = '';
 
     if ('BarcodeDetector' in window) {
-      invBarcodeDetector = new BarcodeDetector({ formats: ['code_128','code_39','code_93','codabar','itf'] });
+      invBarcodeDetector = new BarcodeDetector({ formats: ['code_128'] });
       invScanTimer = setInterval(invScanLoop, 300);
     } else {
       document.getElementById('inv-cam-placeholder').style.display = 'flex';
@@ -3329,7 +3332,7 @@ async function invScanLoop() {
   if (!video || video.readyState < 2 || video.videoWidth === 0) return;
 
   const canvas = document.getElementById('invCanvas');
-  const { cropX, cropY, cropW, cropH } = getScanCrop(video, 0.55, 0.50);
+  const { cropX, cropY, cropW, cropH } = getScanCrop(video, INV_ZONE_W, INV_ZONE_H);
   canvas.width = cropW;
   canvas.height = cropH;
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
@@ -3337,8 +3340,9 @@ async function invScanLoop() {
 
   try {
     const barcodes = await invBarcodeDetector.detect(canvas);
-    if (barcodes && barcodes.length) {
-      const code = barcodes[0].rawValue;
+    const siCode = (barcodes || []).map(b => b.rawValue).find(v => /SI\d{8,}/i.test(v || ''));
+    if (siCode) {
+      const code = siCode;
       const now = Date.now();
       if (code !== invLastScanned || now - invLastScannedTime > 1500) {
         invLastScanned = code;
