@@ -1193,7 +1193,7 @@ const LS = {
   del: k => localStorage.removeItem(k)
 };
 
-const APP_VERSION = 'V5.4';
+const APP_VERSION = 'V5.6';
 
 let state = {
   registry: {}, // { warehouse: [ {order_number, client_name, expected_places} ] }
@@ -1659,6 +1659,7 @@ function processScan(raw, forced = false, isManual = false) {
     document.getElementById('modal-client-input').value = '';
     document.getElementById('modal-client-results').style.display = 'none';
     document.getElementById('modal-client-selected').style.display = 'none';
+    modalSelectedClient = null;
     document.getElementById('modal-manual').classList.add('show');
     setTimeout(() => showModalNumpad(), 50);
     showStatus('red', '❌ Не в реєстрі', order_number, null, null, place, total);
@@ -2025,6 +2026,7 @@ function closeModal() {
   document.getElementById('modal-client-input').value = '';
   document.getElementById('modal-client-results').style.display = 'none';
   document.getElementById('modal-client-selected').style.display = 'none';
+  modalSelectedClient = null;
   pendingQR = null;
   blockScanning(1500);
   lastScanned = '';
@@ -2083,8 +2085,14 @@ function switchModalToKeyboard() {
 
 
 function confirmManualClient() {
-  const name = document.getElementById('modal-client-input').value.trim();
+  const typed = document.getElementById('modal-client-input').value.trim();
+  const name = modalSelectedClient ? modalSelectedClient.name : typed;
   if (!name || !pendingQR) return;
+  if (!modalSelectedClient && /^\d+$/.test(name)) {
+    toast('⚠️ Клієнта з кодом ' + name + ' не знайдено');
+    beep('error');
+    return;
+  }
   const { order_number, place, total, rawQR, autoWarehouse } = pendingQR;
   const isCenterQR = /^QR-/i.test(rawQR || '');
   const warehouse = autoWarehouse || (isCenterQR ? 'center' : 'kyiv1');
@@ -2230,19 +2238,22 @@ function renderReportTable() {
   `;
 }
 
-function exportXLSX() {
-  if (!window.xlsxReady) { toast('⏳ XLSX-бібліотека завантажується, спробуй ще раз...'); return; }
+// ======================== EXCEL REPORT: GROUPED BY CLIENT ========================
+// Rows of one client stay together: registry orders first, then "Поза реєстром".
+// If a client has both a shortage and off-registry parcels, a balance row is added
+// (warehouses split/merge orders, so off-registry parcels often replace a short order).
+function reportClientName(name) {
+  const n = String(name || '').trim();
+  if (/^\d+$/.test(n) && typeof normClientCode === 'function') {
+    const c = state.clientBook.find(x => normClientCode(x.code) === normClientCode(n));
+    if (c) return c.name;
+  }
+  return n || '—';
+}
 
-  const whName = getWhName(selectedReportWh);
-  const date = new Date().toLocaleDateString('uk-UA');
-  const rows = state.registry[selectedReportWh] || [];
-  const scanMap = buildScanMap(selectedReportWh);
-  const allOrders = new Set([...rows.map(r => r.order_number), ...Object.keys(scanMap)]);
-  const whObj = state.warehouses.find(w => w.id === selectedReportWh);
-  const isCenter = whObj && whObj.type === 'center';
+function buildGroupedReportRows(rows, scanMap, allOrders, isCenter) {
   let totalExp = 0, totalFact = 0;
-
-  const dataRows = [];
+  const groups = new Map();
   allOrders.forEach(ord => {
     const reg = rows.find(r => r.order_number === ord);
     const scan = scanMap[ord] || { fact: 0 };
@@ -2255,8 +2266,41 @@ function exportXLSX() {
     else if (!isCenter && exp > 0 && fact < exp) status = 'Недопоставка';
     else if (!isCenter && exp > 0 && fact > exp) status = 'Надлишок';
     else status = 'OK';
-    dataRows.push({ 'Клієнт': reg?.client_name || scan.client_name || '—', '№ замовлення': fmtOrder(ord), 'Очікується': exp || '', 'Факт': fact, 'Статус': status });
+    const client = reportClientName(reg?.client_name || scan.client_name);
+    const key = client.toLowerCase().replace(/\s+/g, ' ').trim();
+    if (!groups.has(key)) groups.set(key, { client, items: [] });
+    groups.get(key).items.push({ inReg: !!reg, exp, fact, row: { 'Клієнт': client, '№ замовлення': fmtOrder(ord), 'Очікується': exp || '', 'Факт': fact, 'Статус': status } });
   });
+
+  const dataRows = [];
+  [...groups.values()]
+    .sort((a, b) => a.client.localeCompare(b.client, 'uk'))
+    .forEach(g => {
+      const reg = g.items.filter(i => i.inReg), extra = g.items.filter(i => !i.inReg);
+      reg.concat(extra).forEach(i => dataRows.push(i.row));
+      const hasShort = reg.some(i => i.row['Статус'] === 'Недопоставка');
+      const gExp = reg.reduce((s, i) => s + i.exp, 0);
+      if (hasShort && extra.length && gExp > 0) {
+        const gFact = g.items.reduce((s, i) => s + i.fact, 0);
+        const diff = gFact - gExp;
+        const st = diff === 0 ? '✅ Компенсовано' : diff < 0 ? '⚠️ Бракує ' + (-diff) : '⚠️ Більше на ' + diff;
+        dataRows.push({ 'Клієнт': '   Разом по клієнту', '№ замовлення': '', 'Очікується': gExp, 'Факт': gFact, 'Статус': st });
+      }
+    });
+  return { dataRows, totalExp, totalFact };
+}
+
+function exportXLSX() {
+  if (!window.xlsxReady) { toast('⏳ XLSX-бібліотека завантажується, спробуй ще раз...'); return; }
+
+  const whName = getWhName(selectedReportWh);
+  const date = new Date().toLocaleDateString('uk-UA');
+  const rows = state.registry[selectedReportWh] || [];
+  const scanMap = buildScanMap(selectedReportWh);
+  const allOrders = new Set([...rows.map(r => r.order_number), ...Object.keys(scanMap)]);
+  const whObj = state.warehouses.find(w => w.id === selectedReportWh);
+  const isCenter = whObj && whObj.type === 'center';
+  const { dataRows, totalExp, totalFact } = buildGroupedReportRows(rows, scanMap, allOrders, isCenter);
 
   const wb = XLSX.utils.book_new();
   const regDate = state.registryDates[selectedReportWh] || '';
@@ -2846,25 +2890,54 @@ function updateClientBookStat() {
     : 'Не завантажено';
 }
 
+// Client chosen in the "not in registry" modal (null = nothing chosen yet)
+let modalSelectedClient = null;
+
+// Code without leading zeros: "01234" and "1234" are the same client code
+function normClientCode(s) {
+  return String(s || '').trim().replace(/^0+(?=\d)/, '');
+}
+
+function showModalSelected(c) {
+  modalSelectedClient = c;
+  const sel = document.getElementById('modal-client-selected');
+  sel.style.display = 'block';
+  sel.style.fontSize = '15px';
+  sel.textContent = '✓ ' + c.code + ' — ' + c.name;
+}
+
 function onClientSearch(val) {
   val = val.trim().toLowerCase();
   const results = document.getElementById('modal-client-results');
   const selected = document.getElementById('modal-client-selected');
   selected.style.display = 'none';
+  modalSelectedClient = null;
 
   if (!val || val.length < 1) { results.style.display = 'none'; return; }
   if (!state.clientBook.length) { results.style.display = 'none'; return; }
 
-  const matches = state.clientBook.filter(c =>
+  const isDigits = /^\d+$/.test(val);
+  const qCode = isDigits ? normClientCode(val) : '';
+  const allMatches = state.clientBook.filter(c =>
+    (isDigits && normClientCode(c.code).includes(qCode)) ||
     c.code.toLowerCase().includes(val) ||
     c.name.toLowerCase().includes(val)
-  ).slice(0, 8);
+  );
 
-  if (!matches.length) {
+  if (!allMatches.length) {
     results.style.display = 'none';
     return;
   }
 
+  // Auto-select: only one candidate, or the typed code matches one client exactly
+  const exact = isDigits ? allMatches.filter(c => normClientCode(c.code) === qCode) : [];
+  if (allMatches.length === 1 || exact.length === 1) {
+    results.style.display = 'none';
+    showModalSelected(allMatches.length === 1 ? allMatches[0] : exact[0]);
+    return;
+  }
+
+  const matches = allMatches.slice(0, 8);
   results.style.display = 'block';
   results.innerHTML = '';
   matches.forEach(c => {
@@ -2884,10 +2957,7 @@ function selectClientFromBook(c) {
   document.getElementById('modal-client-input').value = c.name;
   hideModalNumpad();
   document.getElementById('modal-client-results').style.display = 'none';
-  const sel = document.getElementById('modal-client-selected');
-  sel.style.display = 'block';
-  sel.style.fontSize = '15px';
-  sel.textContent = '✓ ' + c.code + ' — ' + c.name;
+  showModalSelected(c);
 }
 
 // ======================== TELEGRAM ========================
@@ -2918,23 +2988,7 @@ function buildReportBlob(whId) {
 
   const whObj = state.warehouses.find(w => w.id === whId);
   const isCenter = whObj && whObj.type === 'center';
-  let totalExp = 0, totalFact = 0;
-  const dataRows = [];
-
-  allOrders.forEach(ord => {
-    const reg = rows.find(r => r.order_number === ord);
-    const scan = scanMap[ord] || { fact: 0 };
-    const exp = reg ? (reg.expected_places || 0) : 0;
-    const fact = scan.fact;
-    totalExp += exp; totalFact += fact;
-    let status;
-    if (!reg) status = 'Поза реєстром';
-    else if (fact === 0) status = 'Недопоставка';
-    else if (!isCenter && exp > 0 && fact < exp) status = 'Недопоставка';
-    else if (!isCenter && exp > 0 && fact > exp) status = 'Надлишок';
-    else status = 'OK';
-    dataRows.push({ 'Клієнт': reg?.client_name || scan.client_name || '—', '№ замовлення': fmtOrder(ord), 'Очікується': exp || '', 'Факт': fact, 'Статус': status });
-  });
+  const { dataRows, totalExp, totalFact } = buildGroupedReportRows(rows, scanMap, allOrders, isCenter);
 
   const wb = XLSX.utils.book_new();
   const regDateB = state.registryDates[whId] || '';
