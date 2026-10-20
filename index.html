@@ -1207,7 +1207,7 @@ const LS = {
   del: k => localStorage.removeItem(k)
 };
 
-const APP_VERSION = 'V5.9';
+const APP_VERSION = 'V5.10';
 
 let state = {
   registry: {}, // { warehouse: [ {order_number, client_name, expected_places} ] }
@@ -2204,9 +2204,18 @@ function confirmManualClient() {
   const isCenterQR = /^QR-/i.test(rawQR || '');
   const warehouse = autoWarehouse || (isCenterQR ? 'center' : 'kyiv1');
   const fact = getScanCount(order_number) + 1;
-  showStatus('blue', '✏️ Додано вручну', name, order_number, fact, place, total, null);
+  // Same signals as a normal scan: green + high beep for the client's first place, blue otherwise
+  const isFirstForClient = !state.scans.some(s => normName(s.client_name) === normName(name));
+  showStatus(isFirstForClient ? 'green' : 'blue', isFirstForClient ? '🟢 Перше місце' : '🔵 +1 місце', name, order_number, fact, place, total, null);
+  beep(isFirstForClient ? 'success' : 'info');
   recordScan(order_number, name, warehouse, place, total, true, null, rawQR);
   closeModal();
+  if (state.twoAddr.some(n => name.toLowerCase().includes(n.toLowerCase()))) {
+    document.getElementById('warning-banner').classList.add('show');
+    beep('warn');
+  } else {
+    document.getElementById('warning-banner').classList.remove('show');
+  }
 }
 
 // ======================== CLIENTS PAGE ========================
