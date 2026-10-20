@@ -804,24 +804,11 @@ loadScript3('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js
 
   <p class="section-title" style="margin-top:16px">Імпорт</p>
   <div class="card">
-    <button class="btn btn-primary btn-full" style="margin-bottom:12px" onclick="drivePickFile()">📥 Завантажити з Google Drive</button>
-    <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
-      <div style="flex:1;height:1px;background:var(--border)"></div>
-      <span style="font-size:11px;color:var(--text2)">або з пристрою</span>
-      <div style="flex:1;height:1px;background:var(--border)"></div>
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-primary" style="flex:1;padding:12px 8px" onclick="drivePickFile()">📥 Google Drive</button>
+      <button class="btn btn-primary" style="flex:1;padding:12px 8px" onclick="document.getElementById('csv-input').click()">📂 З телефону</button>
     </div>
-    <div class="warehouse-select">
-      <label>Склад для файлу:</label>
-      <select id="import-warehouse">
-        <option value="">— оберіть склад —</option>
-      </select>
-    </div>
-    <div class="drop-zone" id="drop-zone" ondragover="onDragOver(event)" ondrop="onDrop(event)" ondragleave="onDragLeave(event)">
-      <input type="file" id="csv-input" accept=".xlsx,.xls,.csv" multiple onchange="handleFiles(this.files)">
-      <div class="drop-icon">📂</div>
-      <div class="drop-text"><strong>Оберіть файли</strong> або перетягніть сюди</div>
-      <div style="font-size:11px;color:var(--text2);margin-top:4px">Excel (.xlsx) та CSV</div>
-    </div>
+    <input type="file" id="csv-input" accept=".xlsx,.xls,.csv" multiple style="display:none" onchange="handleFiles(this.files)">
     <div class="imported-list" id="imported-list"></div>
   </div>
 
@@ -1207,7 +1194,7 @@ const LS = {
   del: k => localStorage.removeItem(k)
 };
 
-const APP_VERSION = 'V5.10';
+const APP_VERSION = 'V5.11';
 
 let state = {
   registry: {}, // { warehouse: [ {order_number, client_name, expected_places} ] }
@@ -1280,15 +1267,62 @@ function onDrop(e) {
 }
 
 function handleFiles(files) {
-  const wh = document.getElementById('import-warehouse').value;
-  if (!wh) { toast('⚠️ Оберіть склад перед імпортом'); return; }
   Array.from(files).forEach(f => {
     const n = f.name.toLowerCase();
-    if (n.endsWith('.xlsx') || n.endsWith('.xls')) importExcel(f, wh);
-    else if (n.endsWith('.csv')) { const r = new FileReader(); r.onload = e => importCSVBuffer(e.target.result, wh, f.name); r.readAsArrayBuffer(f); }
+    if (n.endsWith('.xlsx') || n.endsWith('.xls')) importExcel(f, null);
+    else if (n.endsWith('.csv')) {
+      const r = new FileReader();
+      r.onload = e => { const buf = e.target.result; askWarehouse(f.name).then(w => { if (w) importCSVBuffer(buf, w, f.name); }); };
+      r.readAsArrayBuffer(f);
+    }
     else toast('⚠️ Непідтримуваний формат: ' + f.name);
   });
   document.getElementById('csv-input').value = '';
+}
+
+// Header spellings (Russian) → warehouse names used in the app
+const WH_ALIASES = [[/КИЕВ/g, 'КИЇВ'], [/ЛЬВОВ/g, 'ЛЬВІВ'], [/РОВНО/g, 'РІВНЕ']];
+function normWhName(s) {
+  let v = String(s || '').toUpperCase().replace(/\s+/g, '').replace(/I/g, 'І');
+  WH_ALIASES.forEach(([re, to]) => v = v.replace(re, to));
+  return v;
+}
+function detectWarehouseFromRows(rows) {
+  const names = state.warehouses.map(w => ({ id: w.id, n: normWhName(w.name) }));
+  for (let i = 0; i < Math.min(rows.length, 15); i++) {
+    for (const cell of rows[i] || []) {
+      const v = normWhName(cell);
+      if (!v) continue;
+      const hit = names.find(x => x.n === v);
+      if (hit) return hit.id;
+    }
+  }
+  return null;
+}
+
+// Ask which warehouse a file belongs to (queued, one dialog at a time)
+let whAskChain = Promise.resolve();
+function askWarehouse(filename) {
+  const job = whAskChain.then(() => new Promise(resolve => {
+    let m = document.getElementById('modal-wh-pick');
+    if (!m) { m = document.createElement('div'); m.id = 'modal-wh-pick'; m.className = 'modal-overlay'; document.body.appendChild(m); }
+    m.innerHTML = '<div class="modal"><div class="modal-title">Який це склад?</div>'
+      + '<div class="modal-sub">Не вдалося визначити склад з файлу:<br><b></b></div>'
+      + '<div id="wh-pick-list" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px"></div>'
+      + '<button class="btn btn-secondary btn-full" id="wh-pick-cancel">Скасувати</button></div>';
+    m.querySelector('.modal-sub b').textContent = filename;
+    const done = id => { m.classList.remove('show'); resolve(id); };
+    state.warehouses.forEach(w => {
+      const b = document.createElement('button');
+      b.className = 'btn btn-secondary'; b.style.padding = '12px 6px'; b.textContent = w.name;
+      b.onclick = () => done(w.id);
+      m.querySelector('#wh-pick-list').appendChild(b);
+    });
+    m.querySelector('#wh-pick-cancel').onclick = () => done(null);
+    m.classList.add('show');
+  }));
+  whAskChain = job.catch(() => {});
+  return job;
 }
 
 // ---- EXCEL import ----
@@ -1300,13 +1334,8 @@ function importExcel(file, whId) {
       const ws = wb.Sheets[wb.SheetNames[0]];
       const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
 
-      // Auto-detect warehouse from cell [7][12] (row 8, col 13 in Excel)
-      let detectedWh = whId;
-      const whCell = rows[7] ? String(rows[7][12] || '').trim().toUpperCase() : '';
-      if (whCell) {
-        const found = state.warehouses.find(w => whCell.includes(w.name.toUpperCase()) || w.name.toUpperCase().includes(whCell));
-        if (found) detectedWh = found.id;
-      }
+      // Warehouse from the registry header (e.g. "КИЕВ1", "ЦЕНТР"); falls back to whId, else asks
+      let detectedWh = detectWarehouseFromRows(rows) || whId;
 
       let colOrder = -1, colClient = -1, colPlaces = -1, colDelivery = -1, colAddress = -1, colSI = -1, startIdx = -1;
 
@@ -1389,7 +1418,8 @@ function importExcel(file, whId) {
           break;
         }
       }
-      applyRecords(records, detectedWh, file.name, fileDate);
+      if (detectedWh) applyRecords(records, detectedWh, file.name, fileDate);
+      else askWarehouse(file.name).then(w => { if (w) applyRecords(records, w, file.name, fileDate); else toast('⚠️ Скасовано: ' + file.name); });
     } catch (err) { toast('❌ Помилка Excel: ' + err.message); console.error(err); }
   };
   reader.readAsArrayBuffer(file);
@@ -1578,7 +1608,8 @@ function getWhName(id) {
 
 function populateWarehouseSelects() {
   const opts = state.warehouses.map(w => `<option value="${w.id}">${w.name}</option>`).join('');
-  document.getElementById('import-warehouse').innerHTML = '<option value="">— оберіть склад —</option>' + opts;
+  const iw = document.getElementById('import-warehouse');
+  if (iw) iw.innerHTML = '<option value="">— оберіть склад —</option>' + opts;
 
   const clientWh = document.getElementById('client-wh-filter');
   clientWh.innerHTML = '<option value="">Всі</option>' + opts;
