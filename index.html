@@ -1132,7 +1132,7 @@ loadScript3('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js
   <div class="modal">
     <!-- Scrollable top: title + input + results -->
     <div class="modal-body-scroll">
-      <div class="modal-title">⚠️ Замовлення не знайдено</div>
+      <div class="modal-title" id="modal-manual-title">⚠️ Замовлення не знайдено</div>
       <div class="modal-sub" id="modal-order-num"></div>
       <input type="text" id="modal-client-input"
              placeholder="Код або назва клієнта..."
@@ -1164,9 +1164,10 @@ loadScript3('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js
           <button class="numpad-btn del" onclick="modalNumpadDel()">⌫</button>
         </div>
       </div>
+      <button class="btn btn-danger btn-full" id="modal-delete-btn" style="display:none;margin-bottom:8px" onclick="deleteEditedScans()">🗑 Видалити сканування</button>
       <div class="modal-btns">
         <button class="btn btn-secondary" onclick="closeModal()">Скасувати</button>
-        <button class="btn btn-primary" onclick="confirmManualClient()">Додати</button>
+        <button class="btn btn-primary" id="modal-confirm-btn" onclick="confirmManualClient()">Додати</button>
       </div>
     </div>
   </div>
@@ -1206,7 +1207,7 @@ const LS = {
   del: k => localStorage.removeItem(k)
 };
 
-const APP_VERSION = 'V5.7';
+const APP_VERSION = 'V5.9';
 
 let state = {
   registry: {}, // { warehouse: [ {order_number, client_name, expected_places} ] }
@@ -1792,10 +1793,10 @@ function renderRecentScans() {
   el.innerHTML = recent.map(s => {
     const fact = state.scans.filter(x => x.order_number === s.order_number).length;
     const color = s.manual ? 'blue' : 'green';
-    return `<div class="scan-item ${color}">
+    return `<div class="scan-item ${color}" style="cursor:pointer" onclick="onRecentScanTap(${s.timestamp})">
       <span class="scan-item-icon">${s.manual ? '✏️' : '📦'}</span>
       <div style="flex:1">
-        <div class="scan-item-name">${s.client_name || '—'}</div>
+        <div class="scan-item-name">${s.client_name || '—'}${s.edits && s.edits.length ? ' <span style="font-size:10px;color:var(--orange)">змінено</span>' : ''}</div>
         <div class="scan-item-order">${fmtOrder(s.order_number)}</div>
       </div>
       <div class="scan-item-count">${s.paCode ? s.paCode : s.place ? s.place+'/'+(s.total||'?') : '—'}</div>
@@ -2041,6 +2042,10 @@ function closeModal() {
   document.getElementById('modal-client-selected').style.display = 'none';
   modalSelectedClient = null;
   pendingQR = null;
+  editTarget = null;
+  document.getElementById('modal-manual-title').textContent = '⚠️ Замовлення не знайдено';
+  document.getElementById('modal-confirm-btn').textContent = 'Додати';
+  document.getElementById('modal-delete-btn').style.display = 'none';
   blockScanning(1500);
   lastScanned = '';
 }
@@ -2097,15 +2102,104 @@ function switchModalToKeyboard() {
 }
 
 
+// ======================== EDIT / DELETE SCANS ========================
+// editTarget: { order_number, warehouse, timestamp|null }  (timestamp = a single scan from "Останні")
+let editTarget = null;
+
+function normName(n) { return String(n || '').toLowerCase().replace(/\s+/g, ' ').trim(); }
+
+function clientHasRegistryOrders(name) {
+  const n = normName(name);
+  return Object.values(state.registry).some(rows => rows.some(r => normName(r.client_name) === n));
+}
+
+function scanEditsText(s) {
+  return (s.edits || []).map(e => e.from + ' → ' + e.to + ' (' +
+    new Date(e.at).toLocaleString('uk-UA', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) + ')').join('; ');
+}
+
+function scansOfTarget() {
+  if (!editTarget) return [];
+  return state.scans.filter(s => s.order_number === editTarget.order_number && s.warehouse === editTarget.warehouse && s.manual);
+}
+
+function onRecentScanTap(ts) {
+  const s = state.scans.find(x => x.timestamp === ts);
+  if (!s) return;
+  if (s.manual) { openClientEdit(s.order_number, s.warehouse, ts); return; }
+  // Registry scan: client comes from registry, so only deleting is allowed
+  const pl = s.place ? ' місце ' + s.place + '/' + (s.total || '?') : '';
+  if (!confirm('Видалити сканування?\n\n' + s.client_name + '\n' + fmtOrder(s.order_number) + pl)) return;
+  state.scans = state.scans.filter(x => x !== s);
+  afterScansChanged('🗑 Сканування видалено');
+}
+
+function openClientEdit(order_number, warehouse, ts) {
+  editTarget = { order_number, warehouse, timestamp: ts || null };
+  const list = scansOfTarget();
+  if (!list.length) { editTarget = null; return; }
+  pendingQR = null;
+  document.getElementById('modal-manual-title').textContent = '✏️ Змінити клієнта';
+  document.getElementById('modal-order-num').textContent =
+    fmtOrder(order_number) + ' · місць: ' + list.length + ' · зараз: ' + list[0].client_name;
+  document.getElementById('modal-confirm-btn').textContent = 'Змінити';
+  const del = document.getElementById('modal-delete-btn');
+  del.style.display = 'block';
+  del.textContent = list.length > 1 ? '🗑 Видалити всі ' + list.length + ' сканування замовлення' : '🗑 Видалити сканування';
+  document.getElementById('modal-client-input').value = '';
+  document.getElementById('modal-client-results').style.display = 'none';
+  document.getElementById('modal-client-selected').style.display = 'none';
+  modalSelectedClient = null;
+  document.getElementById('modal-manual').classList.add('show');
+  blockScanning(30000);
+  setTimeout(() => showModalNumpad(), 50);
+}
+
+function applyClientEdit(name) {
+  const list = scansOfTarget();
+  const from = list.length ? list[0].client_name : '';
+  if (normName(from) === normName(name)) { closeModal(); return; }
+  const at = Date.now();
+  list.forEach(s => { s.edits = (s.edits || []).concat([{ from: s.client_name, to: name, at }]); s.client_name = name; });
+  closeModal();
+  afterScansChanged('✅ ' + from + ' → ' + name);
+}
+
+function deleteEditedScans() {
+  const list = scansOfTarget();
+  if (!list.length) return;
+  const msg = list.length > 1
+    ? 'Видалити всі ' + list.length + ' сканування замовлення ' + fmtOrder(list[0].order_number) + '?'
+    : 'Видалити сканування ' + fmtOrder(list[0].order_number) + '?';
+  if (!confirm(msg)) return;
+  const drop = new Set(list);
+  state.scans = state.scans.filter(s => !drop.has(s));
+  closeModal();
+  afterScansChanged('🗑 Видалено: ' + list.length);
+}
+
+function afterScansChanged(msg) {
+  saveState();
+  updateImportStats();
+  renderRecentScans();
+  if (document.getElementById('page-report').classList.contains('active')) renderReport();
+  if (document.getElementById('page-clients').classList.contains('active')) renderClients();
+  toast(msg);
+}
+
 function confirmManualClient() {
   const typed = document.getElementById('modal-client-input').value.trim();
   const name = modalSelectedClient ? modalSelectedClient.name : typed;
-  if (!name || !pendingQR) return;
+  if (!name || (!pendingQR && !editTarget)) return;
   if (!modalSelectedClient && /^\d+$/.test(name)) {
     toast('⚠️ Клієнта з кодом ' + name + ' не знайдено');
     beep('error');
     return;
   }
+  // Safety check: off-registry parcels almost always belong to a client who has orders today
+  if (!clientHasRegistryOrders(name) &&
+      !confirm('У клієнта «' + name + '» немає жодного замовлення в сьогоднішньому реєстрі.\n\nТочно він?')) return;
+  if (editTarget) { applyClientEdit(name); return; }
   const { order_number, place, total, rawQR, autoWarehouse } = pendingQR;
   const isCenterQR = /^QR-/i.test(rawQR || '');
   const warehouse = autoWarehouse || (isCenterQR ? 'center' : 'kyiv1');
@@ -2233,8 +2327,9 @@ function renderReportTable() {
     const clientName = reg?.client_name || scan.client_name || '—';
     const twoAddr = state.twoAddr.some(n => clientName.toLowerCase().includes(n.toLowerCase()));
 
-    tableRows.push(`<tr>
-      <td>${clientName}${twoAddr ? ' <span class="two-addr-badge">2 адр.</span>' : ''}</td>
+    const editable = !reg && state.scans.some(s => s.order_number === ord && s.warehouse === selectedReportWh && s.manual);
+    tableRows.push(`<tr${editable ? ` style="cursor:pointer" onclick="openClientEdit('${ord}','${selectedReportWh}')"` : ''}>
+      <td>${clientName}${editable ? ' <span style="font-size:11px">✏️</span>' : ''}${twoAddr ? ' <span class="two-addr-badge">2 адр.</span>' : ''}</td>
       <td style="font-family:var(--mono);font-size:11px">${fmtOrder(ord)}</td>
       <td>${exp || '—'}</td>
       <td>${fact}</td>
@@ -2265,13 +2360,12 @@ function reportClientName(name) {
 }
 
 // ---- Black & white report sheet (prints well on a mono printer) ----
-const RPT_FONT = { name: 'Calibri', sz: 12 };
+// Sections: ВИРІВНЮВАННЯ (client has both shortage and surplus) → НЕДОСТАЧА → НАДЛИШОК → ВСЕ ГАРАЗД.
 const RPT_MARGINS = { left: 0.4, right: 0.4, top: 0.5, bottom: 0.5, header: 0.3, footer: 0.3 };
 
 function buildReportSheet(whName, date, regDate, rows, scanMap, allOrders, isCenter) {
-  // 1) collect & group by client
   let totalExp = 0, totalFact = 0;
-  const groups = new Map();
+  const items = [];
   allOrders.forEach(ord => {
     const reg = rows.find(r => r.order_number === ord);
     const scan = scanMap[ord] || { fact: 0 };
@@ -2284,95 +2378,88 @@ function buildReportSheet(whName, date, regDate, rows, scanMap, allOrders, isCen
     else if (!isCenter && exp > 0 && fact < exp) status = 'Недостача';
     else if (!isCenter && exp > 0 && fact > exp) status = 'Надлишок';
     else status = 'OK';
-    const client = reportClientName(reg?.client_name || scan.client_name);
-    const key = client.toLowerCase().replace(/\s+/g, ' ').trim();
-    if (!groups.has(key)) groups.set(key, { client, items: [] });
-    groups.get(key).items.push({ inReg: !!reg, exp, fact, ord, status, client });
+    items.push({ client: reportClientName(reg?.client_name || scan.client_name), ord: fmtOrder(ord), exp, fact, status, inReg: !!reg });
   });
-  const sorted = [...groups.values()].sort((x, y) => x.client.localeCompare(y.client, 'uk'));
-  sorted.forEach(g => g.items = g.items.filter(i => i.inReg).concat(g.items.filter(i => !i.inReg)));
-  const isProblem = g => g.items.some(i => i.status !== 'OK');
-  const probGroups = sorted.filter(isProblem);
-  const okItems = sorted.filter(g => !isProblem(g)).flatMap(g => g.items);
-  const balanceOf = g => {
-    const reg = g.items.filter(i => i.inReg), ex = g.items.filter(i => !i.inReg);
-    const e = reg.reduce((s, i) => s + i.exp, 0);
-    if (!reg.length || !ex.length || e <= 0) return null;
-    const f = g.items.reduce((s, i) => s + i.fact, 0);
-    return { e, f, d: f - e };
-  };
-  const comp = probGroups.filter(g => { const b = balanceOf(g); return b && b.d === 0; }).length;
+  const ws = renderReportSheet({ whName, date, regDate, orders: allOrders.size, totalExp, totalFact }, items);
+  return { ws, totalExp, totalFact };
+}
 
-  // 2) styles
-  const F = RPT_FONT, BOLD = { ...F, bold: true };
-  const thin = { style: 'thin', color: { rgb: 'BFBFBF' } }, med = { style: 'medium', color: { rgb: '404040' } }, thick = { style: 'thick', color: { rgb: '000000' } };
-  const grid = { top: thin, bottom: thin, left: thin, right: thin };
-  const st = (o) => Object.assign({ font: { ...F }, alignment: { vertical: 'center' } }, o || {});
+function renderReportSheet(meta, items) {
+  const F = { name: 'Calibri', sz: 12 }, BOLD = { ...F, bold: true };
+  const line = { style: 'thin', color: { rgb: 'D0D0D0' } }, dark = { style: 'thin', color: { rgb: '7F7F7F' } };
+  const st = o => Object.assign({ font: { ...F }, alignment: { vertical: 'center' } }, o || {});
   const cell = (v, s) => ({ v, t: typeof v === 'number' ? 'n' : 's', s });
-  const align = c => (c === 2 || c === 3) ? 'center' : 'left';
-  const STATUS = {
-    'Недостача':     { text: '✗ Недостача',     font: BOLD },
-    'Поза реєстром': { text: '+ Поза реєстром', font: { ...F, italic: true } },
-    'Надлишок':      { text: '+ Надлишок',      font: { ...F, italic: true } },
-  };
+  const H = c => (c === 2 || c === 3) ? 'center' : 'left';
+  const isMinus = i => i.status === 'Недостача', isPlus = i => i.status === 'Поза реєстром' || i.status === 'Надлишок';
 
-  // 3) rows
+  // group by client
+  const groups = new Map();
+  items.forEach(i => { const k = i.client.toLowerCase().replace(/\s+/g, ' ').trim(); if (!groups.has(k)) groups.set(k, { client: i.client, items: [] }); groups.get(k).items.push(i); });
+  const byName = (a, b) => a.client.localeCompare(b.client, 'uk');
+  const all = [...groups.values()].sort(byName);
+  const order = list => list.filter(i => i.inReg).concat(list.filter(i => !i.inReg));
+  const balance = [], minusOnly = [], plusOnly = [], okRows = [];
+  all.forEach(g => {
+    const prob = order(g.items.filter(i => i.status !== 'OK'));
+    g.items.filter(i => i.status === 'OK').forEach(i => okRows.push(i));
+    if (!prob.length) return;
+    const m = prob.some(isMinus), p = prob.some(isPlus);
+    if (m && p) {
+      const e = prob.filter(i => i.inReg).reduce((s, i) => s + i.exp, 0), f = prob.reduce((s, i) => s + i.fact, 0);
+      balance.push({ client: g.client, items: prob, e, f, d: f - e });
+    } else (m ? minusOnly : plusOnly).push(...prob);
+  });
+  balance.sort((a, b) => (a.d === 0) - (b.d === 0) || byName(a, b)); // not compensated first
+  const comp = balance.filter(b => b.d === 0).length;
+
   const out = [], merges = [], heights = [];
-  out.push([cell('Звіт прийому товару — ' + whName, st({ font: { ...F, sz: 14, bold: true } }))]);
-  out.push([cell('Дата звіту: ' + date + (regDate ? '   Реєстр від: ' + regDate : ''), st())]);
-  out.push([cell('Замовлень: ' + allOrders.size + '   Очікується: ' + totalExp + '   Факт: ' + totalFact, st())]);
-  out.push([cell('Проблемних клієнтів: ' + probGroups.length + '     ✓ компенсовано: ' + comp + '     ✗ перевірити: ' + (probGroups.length - comp), st({ font: BOLD }))]);
-  out.push([]);
+  const blank = (h) => { if (h) heights[out.length] = { hpt: h }; out.push([]); };
+  out.push([cell('Звіт прийому товару — ' + meta.whName, st({ font: { ...F, sz: 14, bold: true } }))]);
+  out.push([cell('Дата звіту: ' + meta.date + (meta.regDate ? '   Реєстр від: ' + meta.regDate : ''), st())]);
+  out.push([cell('Замовлень: ' + meta.orders + '   Очікується: ' + meta.totalExp + '   Факт: ' + meta.totalFact, st())]);
+  out.push([cell(`Вирівнювання: ${balance.length}` + (balance.length ? ` (✓ ${comp}, ✗ ${balance.length - comp})` : '') +
+    `    Недостача: ${minusOnly.length}    Надлишок: ${plusOnly.length}    OK: ${okRows.length}`, st({ font: BOLD }))]);
+
   const section = text => {
-    merges.push({ s: { r: out.length, c: 0 }, e: { r: out.length, c: 4 } }); heights[out.length] = { hpt: 22 };
-    out.push([0, 1, 2, 3, 4].map(c => cell(c ? '' : text, st({ font: { ...F, sz: 13, bold: true }, border: { bottom: thick } }))));
+    blank();
+    merges.push({ s: { r: out.length, c: 0 }, e: { r: out.length, c: 4 } }); heights[out.length] = { hpt: 21 };
+    out.push([0, 1, 2, 3, 4].map(c => cell(c ? '' : text, st({ font: { ...F, sz: 13, bold: true }, fill: { fgColor: { rgb: 'E7E6E6' } } }))));
   };
-  const header = () => out.push(['Клієнт', '№ замовлення', 'Очікується', 'Факт', 'Статус'].map((t, c) =>
-    cell(t, st({ font: BOLD, fill: { fgColor: { rgb: 'D9D9D9' } }, border: grid, alignment: { vertical: 'center', horizontal: c >= 2 ? 'center' : 'left' } }))));
-  const dataRow = (i, extra) => {
-    const s = STATUS[i.status];
-    return [i.client, fmtOrder(i.ord), i.exp || '', i.fact, s ? s.text : i.status].map((v, c) =>
-      cell(v, st(Object.assign({ border: { ...grid }, alignment: { vertical: 'center', horizontal: align(c) } }, extra || {}, (c === 4 && s) ? { font: s.font } : {}))));
-  };
-  const box = (from, to) => {
-    for (let r = from; r <= to; r++) for (let c = 0; c <= 4; c++) {
-      const x = out[r][c]; const b = { ...x.s.border };
-      if (r === from) b.top = med; if (r === to) b.bottom = med; if (c === 0) b.left = med; if (c === 4) b.right = med;
-      x.s = { ...x.s, border: b };
-    }
-  };
+  const colHeader = (first) => out.push([first, '№ замовлення', 'Очікується', 'Факт', 'Статус'].map((t, c) =>
+    cell(t, st({ font: { ...F, sz: 11, color: { rgb: '595959' } }, border: { bottom: dark }, alignment: { vertical: 'center', horizontal: H(c) } }))));
+  const row = (vals, opt = {}) => out.push(vals.map((v, c) => cell(v, st({
+    font: opt.bold ? BOLD : { ...F }, border: (opt.from || 0) <= c ? { [opt.top ? 'top' : 'bottom']: opt.top ? dark : line } : {},
+    ...(opt.fill && c >= (opt.from || 0) ? { fill: { fgColor: { rgb: opt.fill } } } : {}),
+    alignment: { vertical: 'center', horizontal: H(c) } }))));
 
-  if (probGroups.length) {
-    section('ПОТРЕБУЄ УВАГИ — клієнтів: ' + probGroups.length);
-    header();
-    probGroups.forEach((g, gi) => {
-      const from = out.length;
-      g.items.forEach(i => out.push(dataRow(i)));
-      const b = balanceOf(g);
-      if (b) {
-        const ok = b.d === 0;
-        const txt = ok ? '✓ Компенсовано' : b.d < 0 ? '✗ Недостача ' + (-b.d) : '✗ Надлишок ' + b.d;
-        out.push(['Разом по клієнту', '', b.e, b.f, txt].map((v, c) => cell(v, st({ font: BOLD, border: { ...grid },
-          fill: { fgColor: { rgb: ok ? 'E7E6E6' : 'BFBFBF' } }, alignment: { vertical: 'center', horizontal: c === 0 ? 'right' : align(c) } }))));
-      }
-      box(from, out.length - 1);
-      if (gi < probGroups.length - 1) { heights[out.length] = { hpt: 6 }; out.push([]); }
+  if (balance.length) {
+    section(`ВИРІВНЮВАННЯ — недостача і надлишок в одного клієнта (${balance.length})`);
+    colHeader('Клієнт');
+    balance.forEach((b, n) => {
+      if (n) blank();
+      out.push([cell(b.client, st({ font: { ...BOLD, sz: 12 } }))]);
+      b.items.forEach(i => row(['', i.ord, i.inReg ? i.exp : '', i.fact, i.status], { from: 1 }));
+      const txt = b.d === 0 ? '✓ Компенсовано' : b.d < 0 ? '✗ Недостача ' + (-b.d) : '✗ Надлишок ' + b.d;
+      row(['', 'Разом', b.e, b.f, txt], { bold: true, top: true, from: 1, fill: b.d !== 0 ? 'D9D9D9' : null });
     });
-    out.push([]);
   }
-  section('ВСЕ ГАРАЗД — замовлень: ' + okItems.length);
-  header();
-  okItems.forEach((i, n) => out.push(dataRow(i, n % 2 ? { fill: { fgColor: { rgb: 'F2F2F2' } } } : null)));
+  const flat = (title, list) => {
+    if (!list.length) return;
+    section(title);
+    colHeader('Клієнт');
+    list.forEach(i => row([i.client, i.ord, i.inReg ? i.exp : '', i.fact, i.status]));
+  };
+  flat(`НЕДОСТАЧА (${minusOnly.length})`, minusOnly);
+  flat(`НАДЛИШОК — поза реєстром і зайві місця (${plusOnly.length})`, plusOnly);
+  flat(`ВСЕ ГАРАЗД (${okRows.length})`, okRows);
 
-  // 4) sheet
   const ws = {};
-  out.forEach((row, r) => row.forEach((x, c) => { if (x) ws[XLSX.utils.encode_cell({ r, c })] = x; }));
+  out.forEach((r, ri) => r.forEach((x, ci) => { if (x) ws[XLSX.utils.encode_cell({ r: ri, c: ci })] = x; }));
   ws['!ref'] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: out.length - 1, c: 4 } });
   ws['!cols'] = [{ wch: 34 }, { wch: 15 }, { wch: 11 }, { wch: 7 }, { wch: 18 }];
-  ws['!merges'] = merges;
-  ws['!rows'] = heights;
-  ws['!margins'] = RPT_MARGINS;
-  return { ws, totalExp, totalFact };
+  ws['!merges'] = merges; ws['!rows'] = heights;
+  ws['!margins'] = { left: 0.4, right: 0.4, top: 0.5, bottom: 0.5, header: 0.3, footer: 0.3 };
+  return ws;
 }
 
 // Workbook -> bytes, with every sheet set to "fit to 1 page wide", A4 portrait.
@@ -2425,10 +2512,10 @@ function exportXLSX() {
       if (s.paCode) place = s.paCode;
       else if (s.rawQR) { const pa = s.rawQR.match(/QR-([A-Z]{2}\d+)-QR-/i); if (pa) place = pa[1]; else if (s.place) place = s.place + '/' + (s.total || '?'); }
       else if (s.place) place = s.place + '/' + (s.total || '?');
-      return { 'Час': new Date(s.timestamp).toLocaleString('uk-UA'), 'Клієнт': s.client_name || '—', '№ замовлення': fmtOrder(s.order_number), 'Місце': place, 'Склад': getWhName(s.warehouse), 'Вручну': s.manual ? 'Так' : '' };
+      return { 'Час': new Date(s.timestamp).toLocaleString('uk-UA'), 'Клієнт': s.client_name || '—', '№ замовлення': fmtOrder(s.order_number), 'Місце': place, 'Склад': getWhName(s.warehouse), 'Вручну': s.manual ? 'Так' : '', 'Зміни': scanEditsText(s) };
     });
     const wsLog = XLSX.utils.json_to_sheet(scanRows);
-    wsLog['!cols'] = [{ wch: 20 }, { wch: 35 }, { wch: 18 }, { wch: 12 }, { wch: 14 }, { wch: 8 }];
+    wsLog['!cols'] = [{ wch: 20 }, { wch: 35 }, { wch: 18 }, { wch: 12 }, { wch: 14 }, { wch: 8 }, { wch: 40 }];
     wsLog['!margins'] = RPT_MARGINS;
     XLSX.utils.book_append_sheet(wb, wsLog, 'Лог сканувань');
   }
@@ -3104,10 +3191,10 @@ function buildReportBlob(whId) {
       if (s.paCode) place = s.paCode;
       else if (s.rawQR) { const pa = s.rawQR.match(/QR-([A-Z]{2}\d+)-QR-/i); if (pa) place = pa[1]; else if (s.place) place = s.place + '/' + (s.total || '?'); }
       else if (s.place) place = s.place + '/' + (s.total || '?');
-      return { 'Час': new Date(s.timestamp).toLocaleString('uk-UA'), 'Клієнт': s.client_name || '—', '№ замовлення': fmtOrder(s.order_number), 'Місце': place, 'Вручну': s.manual ? 'Так' : '' };
+      return { 'Час': new Date(s.timestamp).toLocaleString('uk-UA'), 'Клієнт': s.client_name || '—', '№ замовлення': fmtOrder(s.order_number), 'Місце': place, 'Вручну': s.manual ? 'Так' : '', 'Зміни': scanEditsText(s) };
     });
     const wsLog = XLSX.utils.json_to_sheet(scanRows);
-    wsLog['!cols'] = [{ wch: 20 }, { wch: 35 }, { wch: 18 }, { wch: 12 }, { wch: 8 }];
+    wsLog['!cols'] = [{ wch: 20 }, { wch: 35 }, { wch: 18 }, { wch: 12 }, { wch: 8 }, { wch: 40 }];
     wsLog['!margins'] = RPT_MARGINS;
     XLSX.utils.book_append_sheet(wb, wsLog, 'Лог сканувань');
   }
