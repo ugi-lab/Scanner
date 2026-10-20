@@ -38,6 +38,19 @@ function loadScript2(url, onload) {
 window.xlsxReady = false;
 loadScript2('https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js', function() {
   window.xlsxReady = true;
+  // Styled fork of the same SheetJS 0.18.5 (borders, fills, bold) for the B&W report.
+  // Replaces window.XLSX only if it loads; otherwise reports are simply unstyled.
+  window.xlsxStyleReady = false;
+  function loadStyle(urls) {
+    if (!urls.length) return;
+    var s = document.createElement('script');
+    s.src = urls[0];
+    s.onload = function() { window.xlsxStyleReady = true; };
+    s.onerror = function() { loadStyle(urls.slice(1)); };
+    document.head.appendChild(s);
+  }
+  loadStyle(['https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js',
+             'https://unpkg.com/xlsx-js-style@1.2.0/dist/xlsx.bundle.js']);
 });
 </script>
 <script>
@@ -1193,7 +1206,7 @@ const LS = {
   del: k => localStorage.removeItem(k)
 };
 
-const APP_VERSION = 'V5.6';
+const APP_VERSION = 'V5.7';
 
 let state = {
   registry: {}, // { warehouse: [ {order_number, client_name, expected_places} ] }
@@ -2212,8 +2225,8 @@ function renderReportTable() {
 
     let statusCls, statusTxt;
     if (!reg) { statusCls = 'status-unreg'; statusTxt = 'Поза реєстром'; }
-    else if (fact === 0) { statusCls = 'status-under'; statusTxt = 'Недопоставка'; }
-    else if (!isCenter && exp > 0 && fact < exp) { statusCls = 'status-under'; statusTxt = 'Недопоставка'; }
+    else if (fact === 0) { statusCls = 'status-under'; statusTxt = 'Недостача'; }
+    else if (!isCenter && exp > 0 && fact < exp) { statusCls = 'status-under'; statusTxt = 'Недостача'; }
     else if (!isCenter && exp > 0 && fact > exp) { statusCls = 'status-over'; statusTxt = 'Надлишок'; }
     else { statusCls = 'status-ok'; statusTxt = 'OK'; }
 
@@ -2251,7 +2264,12 @@ function reportClientName(name) {
   return n || '—';
 }
 
-function buildGroupedReportRows(rows, scanMap, allOrders, isCenter) {
+// ---- Black & white report sheet (prints well on a mono printer) ----
+const RPT_FONT = { name: 'Calibri', sz: 12 };
+const RPT_MARGINS = { left: 0.4, right: 0.4, top: 0.5, bottom: 0.5, header: 0.3, footer: 0.3 };
+
+function buildReportSheet(whName, date, regDate, rows, scanMap, allOrders, isCenter) {
+  // 1) collect & group by client
   let totalExp = 0, totalFact = 0;
   const groups = new Map();
   allOrders.forEach(ord => {
@@ -2262,32 +2280,128 @@ function buildGroupedReportRows(rows, scanMap, allOrders, isCenter) {
     totalExp += exp; totalFact += fact;
     let status;
     if (!reg) status = 'Поза реєстром';
-    else if (fact === 0) status = 'Недопоставка';
-    else if (!isCenter && exp > 0 && fact < exp) status = 'Недопоставка';
+    else if (fact === 0) status = 'Недостача';
+    else if (!isCenter && exp > 0 && fact < exp) status = 'Недостача';
     else if (!isCenter && exp > 0 && fact > exp) status = 'Надлишок';
     else status = 'OK';
     const client = reportClientName(reg?.client_name || scan.client_name);
     const key = client.toLowerCase().replace(/\s+/g, ' ').trim();
     if (!groups.has(key)) groups.set(key, { client, items: [] });
-    groups.get(key).items.push({ inReg: !!reg, exp, fact, row: { 'Клієнт': client, '№ замовлення': fmtOrder(ord), 'Очікується': exp || '', 'Факт': fact, 'Статус': status } });
+    groups.get(key).items.push({ inReg: !!reg, exp, fact, ord, status, client });
   });
+  const sorted = [...groups.values()].sort((x, y) => x.client.localeCompare(y.client, 'uk'));
+  sorted.forEach(g => g.items = g.items.filter(i => i.inReg).concat(g.items.filter(i => !i.inReg)));
+  const isProblem = g => g.items.some(i => i.status !== 'OK');
+  const probGroups = sorted.filter(isProblem);
+  const okItems = sorted.filter(g => !isProblem(g)).flatMap(g => g.items);
+  const balanceOf = g => {
+    const reg = g.items.filter(i => i.inReg), ex = g.items.filter(i => !i.inReg);
+    const e = reg.reduce((s, i) => s + i.exp, 0);
+    if (!reg.length || !ex.length || e <= 0) return null;
+    const f = g.items.reduce((s, i) => s + i.fact, 0);
+    return { e, f, d: f - e };
+  };
+  const comp = probGroups.filter(g => { const b = balanceOf(g); return b && b.d === 0; }).length;
 
-  const dataRows = [];
-  [...groups.values()]
-    .sort((a, b) => a.client.localeCompare(b.client, 'uk'))
-    .forEach(g => {
-      const reg = g.items.filter(i => i.inReg), extra = g.items.filter(i => !i.inReg);
-      reg.concat(extra).forEach(i => dataRows.push(i.row));
-      const hasShort = reg.some(i => i.row['Статус'] === 'Недопоставка');
-      const gExp = reg.reduce((s, i) => s + i.exp, 0);
-      if (hasShort && extra.length && gExp > 0) {
-        const gFact = g.items.reduce((s, i) => s + i.fact, 0);
-        const diff = gFact - gExp;
-        const st = diff === 0 ? '✅ Компенсовано' : diff < 0 ? '⚠️ Бракує ' + (-diff) : '⚠️ Більше на ' + diff;
-        dataRows.push({ 'Клієнт': '   Разом по клієнту', '№ замовлення': '', 'Очікується': gExp, 'Факт': gFact, 'Статус': st });
+  // 2) styles
+  const F = RPT_FONT, BOLD = { ...F, bold: true };
+  const thin = { style: 'thin', color: { rgb: 'BFBFBF' } }, med = { style: 'medium', color: { rgb: '404040' } }, thick = { style: 'thick', color: { rgb: '000000' } };
+  const grid = { top: thin, bottom: thin, left: thin, right: thin };
+  const st = (o) => Object.assign({ font: { ...F }, alignment: { vertical: 'center' } }, o || {});
+  const cell = (v, s) => ({ v, t: typeof v === 'number' ? 'n' : 's', s });
+  const align = c => (c === 2 || c === 3) ? 'center' : 'left';
+  const STATUS = {
+    'Недостача':     { text: '✗ Недостача',     font: BOLD },
+    'Поза реєстром': { text: '+ Поза реєстром', font: { ...F, italic: true } },
+    'Надлишок':      { text: '+ Надлишок',      font: { ...F, italic: true } },
+  };
+
+  // 3) rows
+  const out = [], merges = [], heights = [];
+  out.push([cell('Звіт прийому товару — ' + whName, st({ font: { ...F, sz: 14, bold: true } }))]);
+  out.push([cell('Дата звіту: ' + date + (regDate ? '   Реєстр від: ' + regDate : ''), st())]);
+  out.push([cell('Замовлень: ' + allOrders.size + '   Очікується: ' + totalExp + '   Факт: ' + totalFact, st())]);
+  out.push([cell('Проблемних клієнтів: ' + probGroups.length + '     ✓ компенсовано: ' + comp + '     ✗ перевірити: ' + (probGroups.length - comp), st({ font: BOLD }))]);
+  out.push([]);
+  const section = text => {
+    merges.push({ s: { r: out.length, c: 0 }, e: { r: out.length, c: 4 } }); heights[out.length] = { hpt: 22 };
+    out.push([0, 1, 2, 3, 4].map(c => cell(c ? '' : text, st({ font: { ...F, sz: 13, bold: true }, border: { bottom: thick } }))));
+  };
+  const header = () => out.push(['Клієнт', '№ замовлення', 'Очікується', 'Факт', 'Статус'].map((t, c) =>
+    cell(t, st({ font: BOLD, fill: { fgColor: { rgb: 'D9D9D9' } }, border: grid, alignment: { vertical: 'center', horizontal: c >= 2 ? 'center' : 'left' } }))));
+  const dataRow = (i, extra) => {
+    const s = STATUS[i.status];
+    return [i.client, fmtOrder(i.ord), i.exp || '', i.fact, s ? s.text : i.status].map((v, c) =>
+      cell(v, st(Object.assign({ border: { ...grid }, alignment: { vertical: 'center', horizontal: align(c) } }, extra || {}, (c === 4 && s) ? { font: s.font } : {}))));
+  };
+  const box = (from, to) => {
+    for (let r = from; r <= to; r++) for (let c = 0; c <= 4; c++) {
+      const x = out[r][c]; const b = { ...x.s.border };
+      if (r === from) b.top = med; if (r === to) b.bottom = med; if (c === 0) b.left = med; if (c === 4) b.right = med;
+      x.s = { ...x.s, border: b };
+    }
+  };
+
+  if (probGroups.length) {
+    section('ПОТРЕБУЄ УВАГИ — клієнтів: ' + probGroups.length);
+    header();
+    probGroups.forEach((g, gi) => {
+      const from = out.length;
+      g.items.forEach(i => out.push(dataRow(i)));
+      const b = balanceOf(g);
+      if (b) {
+        const ok = b.d === 0;
+        const txt = ok ? '✓ Компенсовано' : b.d < 0 ? '✗ Недостача ' + (-b.d) : '✗ Надлишок ' + b.d;
+        out.push(['Разом по клієнту', '', b.e, b.f, txt].map((v, c) => cell(v, st({ font: BOLD, border: { ...grid },
+          fill: { fgColor: { rgb: ok ? 'E7E6E6' : 'BFBFBF' } }, alignment: { vertical: 'center', horizontal: c === 0 ? 'right' : align(c) } }))));
       }
+      box(from, out.length - 1);
+      if (gi < probGroups.length - 1) { heights[out.length] = { hpt: 6 }; out.push([]); }
     });
-  return { dataRows, totalExp, totalFact };
+    out.push([]);
+  }
+  section('ВСЕ ГАРАЗД — замовлень: ' + okItems.length);
+  header();
+  okItems.forEach((i, n) => out.push(dataRow(i, n % 2 ? { fill: { fgColor: { rgb: 'F2F2F2' } } } : null)));
+
+  // 4) sheet
+  const ws = {};
+  out.forEach((row, r) => row.forEach((x, c) => { if (x) ws[XLSX.utils.encode_cell({ r, c })] = x; }));
+  ws['!ref'] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: out.length - 1, c: 4 } });
+  ws['!cols'] = [{ wch: 34 }, { wch: 15 }, { wch: 11 }, { wch: 7 }, { wch: 18 }];
+  ws['!merges'] = merges;
+  ws['!rows'] = heights;
+  ws['!margins'] = RPT_MARGINS;
+  return { ws, totalExp, totalFact };
+}
+
+// Workbook -> bytes, with every sheet set to "fit to 1 page wide", A4 portrait.
+function xlsxBytes(wb) {
+  const raw = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+  try {
+    if (!XLSX.CFB) return raw;
+    const zip = XLSX.CFB.read(new Uint8Array(raw), { type: 'array' });
+    zip.FileIndex.forEach((f, i) => {
+      if (!/xl\/worksheets\/sheet\d+\.xml$/.test(zip.FullPaths[i])) return;
+      let xml = new TextDecoder().decode(f.content);
+      if (/<pageSetup[\s>\/]/.test(xml)) return;
+      xml = /<sheetPr[\s>]/.test(xml)
+        ? xml.replace(/<sheetPr([^>]*?)\/>/, '<sheetPr$1><pageSetUpPr fitToPage="1"/></sheetPr>').replace(/<sheetPr([^>]*?)>(?!<pageSetUpPr)/, '<sheetPr$1><pageSetUpPr fitToPage="1"/>')
+        : xml.replace(/<worksheet([^>]*)>/, '<worksheet$1><sheetPr><pageSetUpPr fitToPage="1"/></sheetPr>');
+      const ps = '<pageSetup paperSize="9" orientation="portrait" fitToWidth="1" fitToHeight="0"/>';
+      xml = /<pageMargins[^>]*\/>/.test(xml) ? xml.replace(/(<pageMargins[^>]*\/>)/, '$1' + ps) : xml.replace('</sheetData>', '</sheetData>' + ps);
+      f.content = new TextEncoder().encode(xml); f.size = f.content.length;
+    });
+    return XLSX.CFB.write(zip, { fileType: 'zip', type: 'array' });
+  } catch (e) { console.warn('fit-to-width skipped', e); return raw; }
+}
+
+function downloadBytes(bytes, filename) {
+  const blob = new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = filename;
+  document.body.appendChild(a); a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
 }
 
 function exportXLSX() {
@@ -2300,22 +2414,10 @@ function exportXLSX() {
   const allOrders = new Set([...rows.map(r => r.order_number), ...Object.keys(scanMap)]);
   const whObj = state.warehouses.find(w => w.id === selectedReportWh);
   const isCenter = whObj && whObj.type === 'center';
-  const { dataRows, totalExp, totalFact } = buildGroupedReportRows(rows, scanMap, allOrders, isCenter);
-
-  const wb = XLSX.utils.book_new();
   const regDate = state.registryDates[selectedReportWh] || '';
-  const headerInfo = [
-    ['Звіт прийому товару — ' + whName],
-    ['Дата звіту: ' + date + (regDate ? '   Реєстр від: ' + regDate : '')],
-    ['Замовлень: ' + allOrders.size + '   Очікується: ' + totalExp + '   Факт: ' + totalFact],
-    []
-  ];
-  const ws = XLSX.utils.aoa_to_sheet(headerInfo);
-  XLSX.utils.sheet_add_json(ws, dataRows, { origin: 'A5' });
-  ws['!cols'] = [{ wch: 35 }, { wch: 18 }, { wch: 12 }, { wch: 8 }, { wch: 16 }];
-  ws['!pageSetup'] = { fitToPage: true, fitToWidth: 1, fitToHeight: 0, orientation: 'landscape', paperSize: 9 };
-  ws['!margins'] = { left: 0.5, right: 0.5, top: 0.75, bottom: 0.75, header: 0.3, footer: 0.3 };
-  XLSX.utils.book_append_sheet(wb, ws, whName.substring(0, 31));
+  const rep = buildReportSheet(whName, date, regDate, rows, scanMap, allOrders, isCenter);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, rep.ws, whName.substring(0, 31));
 
   if (state.scans.length) {
     const scanRows = [...state.scans].reverse().map(s => {
@@ -2327,11 +2429,12 @@ function exportXLSX() {
     });
     const wsLog = XLSX.utils.json_to_sheet(scanRows);
     wsLog['!cols'] = [{ wch: 20 }, { wch: 35 }, { wch: 18 }, { wch: 12 }, { wch: 14 }, { wch: 8 }];
+    wsLog['!margins'] = RPT_MARGINS;
     XLSX.utils.book_append_sheet(wb, wsLog, 'Лог сканувань');
   }
 
   const filename = 'zvit_' + whName + '_' + date.replace(/\./g, '-') + '.xlsx';
-  XLSX.writeFile(wb, filename, { cellStyles: true });
+  downloadBytes(xlsxBytes(wb), filename);
   toast('✅ Збережено: ' + filename);
 }
 
@@ -2369,8 +2472,8 @@ function printReport() {
     const isCenterX = whObjX && whObjX.type === 'center';
     let status;
     if (!reg) status = 'Поза реєстром';
-    else if (fact === 0) status = 'Недопоставка';
-    else if (!isCenterX && exp > 0 && fact < exp) status = 'Недопоставка';
+    else if (fact === 0) status = 'Недостача';
+    else if (!isCenterX && exp > 0 && fact < exp) status = 'Недостача';
     else if (!isCenterX && exp > 0 && fact > exp) status = 'Надлишок';
     else status = 'OK';
 
@@ -2419,7 +2522,7 @@ function printReport() {
         const v = data.cell.raw;
         if (v === 'OK') data.cell.styles.textColor = [0, 150, 80];
         else if (v === 'Надлишок') data.cell.styles.textColor = [200, 50, 50];
-        else if (v === 'Недопоставка') data.cell.styles.textColor = [200, 120, 0];
+        else if (v === 'Недостача') data.cell.styles.textColor = [200, 120, 0];
         else if (v === 'Поза реєстром') data.cell.styles.textColor = [200, 50, 50];
       }
     }
@@ -2805,8 +2908,8 @@ async function exportToDrive() {
     const isCenterD = whObjD && whObjD.type === 'center';
     let status;
     if (!reg) status = 'Поза реєстром';
-    else if (fact === 0) status = 'Недопоставка';
-    else if (!isCenterD && exp > 0 && fact < exp) status = 'Недопоставка';
+    else if (fact === 0) status = 'Недостача';
+    else if (!isCenterD && exp > 0 && fact < exp) status = 'Недостача';
     else if (!isCenterD && exp > 0 && fact > exp) status = 'Надлишок';
     else status = 'OK';
     dataRows.push({ 'Клієнт': reg?.client_name || scan.client_name || '—', '№ замовлення': fmtOrder(ord), 'Очікується': exp || '', 'Факт': fact, 'Статус': status });
@@ -2988,21 +3091,11 @@ function buildReportBlob(whId) {
 
   const whObj = state.warehouses.find(w => w.id === whId);
   const isCenter = whObj && whObj.type === 'center';
-  const { dataRows, totalExp, totalFact } = buildGroupedReportRows(rows, scanMap, allOrders, isCenter);
-
-  const wb = XLSX.utils.book_new();
   const regDateB = state.registryDates[whId] || '';
-  const headerInfo = [
-    ['Звіт прийому товару — ' + whName],
-    ['Дата звіту: ' + date + (regDateB ? '   Реєстр від: ' + regDateB : '')],
-    ['Замовлень: ' + allOrders.size + '   Очікується: ' + totalExp + '   Факт: ' + totalFact],
-    []
-  ];
-  const ws = XLSX.utils.aoa_to_sheet(headerInfo);
-  XLSX.utils.sheet_add_json(ws, dataRows, { origin: 'A5' });
-  ws['!cols'] = [{ wch: 35 }, { wch: 18 }, { wch: 12 }, { wch: 8 }, { wch: 16 }];
-  ws['!pageSetup'] = { fitToPage: true, fitToWidth: 1, fitToHeight: 0, orientation: 'landscape' };
-  XLSX.utils.book_append_sheet(wb, ws, whName.substring(0, 31));
+  const rep = buildReportSheet(whName, date, regDateB, rows, scanMap, allOrders, isCenter);
+  const totalFact = rep.totalFact;
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, rep.ws, whName.substring(0, 31));
 
   const whScans = state.scans.filter(s => s.warehouse === whId);
   if (whScans.length) {
@@ -3015,10 +3108,11 @@ function buildReportBlob(whId) {
     });
     const wsLog = XLSX.utils.json_to_sheet(scanRows);
     wsLog['!cols'] = [{ wch: 20 }, { wch: 35 }, { wch: 18 }, { wch: 12 }, { wch: 8 }];
+    wsLog['!margins'] = RPT_MARGINS;
     XLSX.utils.book_append_sheet(wb, wsLog, 'Лог сканувань');
   }
 
-  const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+  const wbout = xlsxBytes(wb);
   return {
     blob: new Blob([wbout], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }),
     filename: 'Результат_' + whName + '_' + date.replace(/\./g, '-') + '.xlsx',
