@@ -860,6 +860,7 @@ loadScript3('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js
     <button class="btn btn-secondary" id="btn-stop" onclick="stopCamera()" style="flex:1;display:none">⏹ Стоп</button>
     <button class="btn btn-secondary" onclick="flipCamera()" id="btn-flip" title="Змінити камеру" style="display:none">🔄</button>
   </div>
+  <button class="btn btn-secondary btn-full" id="btn-ocr" onclick="readLabelButton()" style="display:none;margin:-4px 0 12px">🔤 Читати бірку (QR не читається)</button>
 
   <!-- Camera -->
   <div class="camera-wrap" id="camera-wrap">
@@ -1121,6 +1122,7 @@ loadScript3('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js
     <div class="modal-body-scroll">
       <div class="modal-title" id="modal-manual-title">⚠️ Замовлення не знайдено</div>
       <div class="modal-sub" id="modal-order-num"></div>
+      <div id="modal-ocr-status" style="display:none;font-size:14px;color:var(--text2);margin:-8px 0 10px"></div>
       <input type="text" id="modal-client-input"
              placeholder="Код або назва клієнта..."
              autocomplete="off"
@@ -1194,7 +1196,7 @@ const LS = {
   del: k => localStorage.removeItem(k)
 };
 
-const APP_VERSION = 'V5.11';
+const APP_VERSION = 'V5.12';
 
 let state = {
   registry: {}, // { warehouse: [ {order_number, client_name, expected_places} ] }
@@ -1707,6 +1709,7 @@ function processScan(raw, forced = false, isManual = false) {
     modalSelectedClient = null;
     document.getElementById('modal-manual').classList.add('show');
     setTimeout(() => showModalNumpad(), 50);
+    setTimeout(() => ocrForManualModal(isManual), 0);
     showStatus('red', '❌ Не в реєстрі', order_number, null, null, place, total);
     beep('error');
     blockScanning(30000); // block until user dismisses modal
@@ -1862,6 +1865,7 @@ async function startCamera() {
     document.getElementById('btn-start').style.display = 'none';
     document.getElementById('btn-stop').style.display = '';
     document.getElementById('btn-flip').style.display = '';
+    document.getElementById('btn-ocr').style.display = ''; setTimeout(() => loadOcr().catch(() => {}), 1500);
     // setInterval — надійніше за requestAnimationFrame на Android Chrome
     scanTimer = setInterval(scanLoop, 200);
   } catch(e) {
@@ -1879,6 +1883,7 @@ function stopCamera() {
   document.getElementById('btn-start').style.display = '';
   document.getElementById('btn-stop').style.display = 'none';
   document.getElementById('btn-flip').style.display = 'none';
+  document.getElementById('btn-ocr').style.display = 'none';
 }
 
 function flipCamera() {
@@ -2074,6 +2079,8 @@ function closeModal() {
   modalSelectedClient = null;
   pendingQR = null;
   editTarget = null;
+  ocrModalToken++;
+  document.getElementById('modal-ocr-status').style.display = 'none';
   document.getElementById('modal-manual-title').textContent = '⚠️ Замовлення не знайдено';
   document.getElementById('modal-confirm-btn').textContent = 'Додати';
   document.getElementById('modal-delete-btn').style.display = 'none';
@@ -2132,6 +2139,148 @@ function switchModalToKeyboard() {
   document.getElementById('modal-numpad-wrap').style.display = 'none';
 }
 
+
+// ======================== LABEL OCR (client code / order number) ========================
+// Tesseract.js is loaded lazily from CDN; first use downloads a few MB, then it is cached.
+let ocrWorkerPromise = null;
+let lastOcr = null;        // { codes, last4, full, places, at } from the "Читати бірку" button
+let ocrModalToken = 0;     // invalidates a running modal OCR when the modal closes
+
+function loadOcr() {
+  if (ocrWorkerPromise) return ocrWorkerPromise;
+  const P = window.OCR_PATHS || {};
+  ocrWorkerPromise = new Promise((resolve, reject) => {
+    const create = () => {
+      const opts = {}; ['workerPath', 'corePath', 'langPath'].forEach(k => { if (P[k]) opts[k] = P[k]; });
+      Tesseract.createWorker('eng', 1, opts)
+        .then(async w => { await w.setParameters({ tessedit_pageseg_mode: '11' }); resolve(w); }, reject);
+    };
+    if (window.Tesseract) return create();
+    const s = document.createElement('script');
+    s.src = P.lib || 'https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js';
+    s.onload = create; s.onerror = () => reject(new Error('Не вдалося завантажити розпізнавання'));
+    document.head.appendChild(s);
+  });
+  ocrWorkerPromise.catch(() => { ocrWorkerPromise = null; });
+  return ocrWorkerPromise;
+}
+
+// Grey, slightly contrasted snapshot of the current camera frame (max 1280 px)
+function snapshotCamera() {
+  const v = document.getElementById('qrVideo');
+  if (!stream || !v || v.readyState < 2 || !v.videoWidth) return null;
+  const k = Math.min(1, 1280 / Math.max(v.videoWidth, v.videoHeight));
+  const c = document.createElement('canvas');
+  c.width = Math.round(v.videoWidth * k); c.height = Math.round(v.videoHeight * k);
+  const ctx = c.getContext('2d');
+  ctx.filter = 'grayscale(1) contrast(1.3)';
+  ctx.drawImage(v, 0, 0, c.width, c.height);
+  return c;
+}
+
+function rotate180(src) {
+  const c = document.createElement('canvas'); c.width = src.width; c.height = src.height;
+  const ctx = c.getContext('2d'); ctx.translate(c.width, c.height); ctx.rotate(Math.PI); ctx.drawImage(src, 0, 0);
+  return c;
+}
+
+// Label layout: "S008478_5127 #   20.10.2026   Мест: 1/1"  /  "46215 - Кобзуненко Олександр"
+function parseLabelText(txt) {
+  const t = String(txt || '');
+  const codes = [...t.matchAll(/(?<!\d)(\d{5})\s*[-–—~]\s*\S/g)].map(m => m[1]);
+  const last4 = [...t.matchAll(/(?<!\d)(\d{4})\s*#/g)].map(m => m[1]);
+  const full = [...t.matchAll(/[S$5]\s?(\d{6})[\s_]+(\d{4})\s*#/g)].map(m => 'S' + m[1] + m[2]);
+  const pm = t.match(/(?<![\d.\/])(\d{1,2})\s*\/\s*(\d{1,2})(?![\d.\/])/);
+  const places = pm && +pm[1] >= 1 && +pm[1] <= +pm[2] ? pm[1] + '/' + pm[2] : null;
+  return { codes, last4, full, places };
+}
+
+async function readLabel(canvas) {
+  const w = await loadOcr();
+  let r = parseLabelText((await w.recognize(canvas)).data.text);
+  if (!r.codes.length && !r.last4.length) {                 // label upside down?
+    const r2 = parseLabelText((await w.recognize(rotate180(canvas))).data.text);
+    if (r2.codes.length || r2.last4.length) r = r2;
+  }
+  return r;
+}
+
+// Codes that exist in the client book (unique clients)
+function clientsForCodes(codes) {
+  const out = [];
+  codes.forEach(code => {
+    const c = state.clientBook.find(x => normClientCode(x.code) === normClientCode(code));
+    if (c && !out.includes(c)) out.push(c);
+  });
+  return out;
+}
+
+function setOcrStatus(text) {
+  const el = document.getElementById('modal-ocr-status');
+  el.style.display = text ? 'block' : 'none'; el.textContent = text || '';
+}
+
+// "Order not in registry" modal: try to fill the client from the label
+async function ocrForManualModal(isManual) {
+  const fresh = lastOcr && Date.now() - lastOcr.at < 60000 ? lastOcr : null;
+  const canvas = fresh ? null : (isManual ? null : snapshotCamera());
+  if (!fresh && !canvas) return;
+  const token = ++ocrModalToken;
+  setOcrStatus('🔤 Читаю бірку…');
+  let r;
+  try { r = fresh || await readLabel(canvas); }
+  catch (e) { if (token === ocrModalToken) setOcrStatus('🔤 Розпізнавання недоступне — введи вручну'); return; }
+  lastOcr = null;
+  if (token !== ocrModalToken || editTarget) return;           // modal closed or reused
+  const found = clientsForCodes(r.codes);
+  const inp = document.getElementById('modal-client-input');
+  if (found.length === 1) {
+    if (!inp.value.trim() && !modalSelectedClient) { inp.value = found[0].code; onClientSearch(found[0].code); }
+    setOcrStatus('🔤 З бірки: ' + found[0].code + ' — перевір ім\'я');
+  } else if (found.length > 1) {
+    setOcrStatus('🔤 На бірці кілька кодів (' + found.map(c => c.code).join(', ') + ') — вибери вручну');
+  } else if (r.codes.length) {
+    setOcrStatus('🔤 Код ' + r.codes[0] + ' з бірки не знайдено в базі клієнтів');
+  } else {
+    setOcrStatus('🔤 Код на бірці не прочитано — введи вручну');
+  }
+}
+
+// Button: QR is folded/unreadable — read the order number (and client code) from the label text
+async function readLabelButton() {
+  const canvas = snapshotCamera();
+  if (!canvas) { toast('⚠️ Спершу запусти камеру'); return; }
+  const btn = document.getElementById('btn-ocr');
+  btn.disabled = true; btn.textContent = '🔤 Читаю бірку…';
+  blockScanning(8000);
+  let r;
+  try { r = await readLabel(canvas); }
+  catch (e) { toast('❌ ' + e.message); return; }
+  finally { btn.disabled = false; btn.textContent = '🔤 Читати бірку (QR не читається)'; blockScanning(1500); }
+  lastOcr = Object.assign({ at: Date.now() }, r);
+  const tail = r.places ? '-' + r.places : '';
+  // 1) full order number read and it is in the registry
+  const fullReg = r.full.find(o => findInRegistry(o));
+  if (fullReg) { processScan('LB15-' + fullReg + tail, false, true); return; }
+  // 2) last 4 digits -> search the registry
+  if (r.last4.length) {
+    const l4 = r.last4[0];
+    const matches = [];
+    Object.values(state.registry).forEach(rows => rows.forEach(x => { if (x.order_number.endsWith(l4)) matches.push(x.order_number); }));
+    const uniq = [...new Set(matches)];
+    if (uniq.length === 1) { processScan('LB15-' + uniq[0] + tail, false, true); return; }
+    if (uniq.length > 1) {
+      const inp = document.getElementById('manual-qr'); inp.value = l4; onManualInput(l4);
+      toast('🔤 …' + l4 + ': кілька замовлень — вибери'); return;
+    }
+    // 3) not in registry: need the full number to record an off-registry parcel
+    if (r.full.length) { processScan('LB15-' + r.full[0] + tail, false, true); return; }
+    lastOcr = null;
+    toast('🔤 …' + l4 + ' немає в реєстрі — введи номер з бірки вручну'); return;
+  }
+  lastOcr = null;
+  toast('🔤 Не вдалося прочитати бірку — наведи ближче і рівніше');
+}
 
 // ======================== EDIT / DELETE SCANS ========================
 // editTarget: { order_number, warehouse, timestamp|null }  (timestamp = a single scan from "Останні")
