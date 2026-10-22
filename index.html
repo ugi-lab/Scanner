@@ -310,6 +310,13 @@ loadScript3('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js
   .yellow .status-label { color: #FFD60A; }
   .scan-item.yellow    { border-left-color: #FFD60A; }
 
+  /* === LABEL LENS (OCR preview) === */
+  .lens-dots { position:absolute; inset:0; pointer-events:none; display:none; }
+  .lens-dots.on { display:block; }
+  .lens-dots i { position:absolute; width:7px; height:7px; border-radius:50%; background:#fff;
+    box-shadow:0 0 8px 2px rgba(0,212,170,.9); animation:lensTw 1.6s ease-in-out infinite; transition:left .8s, top .8s; }
+  @keyframes lensTw { 0%,100% { transform:scale(.4); opacity:.2 } 50% { transform:scale(1); opacity:1 } }
+
   @keyframes barcodeSwipe {
     0%,100% { top: 10%; }
     50%     { top: 80%; }
@@ -1122,7 +1129,15 @@ loadScript3('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js
     <div class="modal-body-scroll">
       <div class="modal-title" id="modal-manual-title">⚠️ Замовлення не знайдено</div>
       <div class="modal-sub" id="modal-order-num"></div>
-      <div id="modal-ocr-status" style="display:none;font-size:14px;color:var(--text2);margin:-8px 0 10px"></div>
+      <div id="lens" style="display:none;margin:-6px 0 10px">
+        <div style="position:relative;border-radius:10px;overflow:hidden;border:1px solid var(--border);background:#000">
+          <canvas id="lens-canvas" style="display:block;width:100%;max-height:230px;object-fit:contain"></canvas>
+          <video id="lens-video" autoplay playsinline muted style="display:none;width:100%;height:200px;object-fit:cover"></video>
+          <div id="lens-dots" class="lens-dots"></div>
+        </div>
+        <div id="lens-cap" style="font-size:14px;color:var(--text2);margin-top:6px;line-height:1.4"></div>
+        <button class="btn btn-secondary btn-full" id="lens-other" style="display:none;margin-top:6px" onclick="lensOtherHandler && lensOtherHandler()">🔄 Інший бік бірки</button>
+      </div>
       <input type="text" id="modal-client-input"
              placeholder="Код або назва клієнта..."
              autocomplete="off"
@@ -1196,7 +1211,7 @@ const LS = {
   del: k => localStorage.removeItem(k)
 };
 
-const APP_VERSION = 'V5.12';
+const APP_VERSION = 'V5.13';
 
 let state = {
   registry: {}, // { warehouse: [ {order_number, client_name, expected_places} ] }
@@ -2080,7 +2095,7 @@ function closeModal() {
   pendingQR = null;
   editTarget = null;
   ocrModalToken++;
-  document.getElementById('modal-ocr-status').style.display = 'none';
+  stopLensLive(); lensHide(); labelCtx = null; lensOtherHandler = null; setModalMode('add');
   document.getElementById('modal-manual-title').textContent = '⚠️ Замовлення не знайдено';
   document.getElementById('modal-confirm-btn').textContent = 'Додати';
   document.getElementById('modal-delete-btn').style.display = 'none';
@@ -2143,8 +2158,10 @@ function switchModalToKeyboard() {
 // ======================== LABEL OCR (client code / order number) ========================
 // Tesseract.js is loaded lazily from CDN; first use downloads a few MB, then it is cached.
 let ocrWorkerPromise = null;
-let lastOcr = null;        // { codes, last4, full, places, at } from the "Читати бірку" button
-let ocrModalToken = 0;     // invalidates a running modal OCR when the modal closes
+let ocrModalToken = 0;        // invalidates running OCR when the modal closes / changes
+let labelCtx = null;          // accumulated label data in "QR unreadable" flow
+let lensOtherHandler = null;  // what "🔄 Інший бік бірки" does in the current situation
+let modalMode = 'add';        // 'add' | 'label'
 
 function loadOcr() {
   if (ocrWorkerPromise) return ocrWorkerPromise;
@@ -2152,8 +2169,7 @@ function loadOcr() {
   ocrWorkerPromise = new Promise((resolve, reject) => {
     const create = () => {
       const opts = {}; ['workerPath', 'corePath', 'langPath'].forEach(k => { if (P[k]) opts[k] = P[k]; });
-      Tesseract.createWorker('eng', 1, opts)
-        .then(async w => { await w.setParameters({ tessedit_pageseg_mode: '11' }); resolve(w); }, reject);
+      Tesseract.createWorker('eng', 1, opts).then(resolve, reject);
     };
     if (window.Tesseract) return create();
     const s = document.createElement('script');
@@ -2183,26 +2199,73 @@ function rotate180(src) {
   const ctx = c.getContext('2d'); ctx.translate(c.width, c.height); ctx.rotate(Math.PI); ctx.drawImage(src, 0, 0);
   return c;
 }
+function cropScale(src, x, y, w, hh, k) {
+  const c = document.createElement('canvas'); c.width = Math.round(w * k); c.height = Math.round(hh * k);
+  const ctx = c.getContext('2d'); ctx.imageSmoothingQuality = 'high'; ctx.drawImage(src, x, y, w, hh, 0, 0, c.width, c.height);
+  return c;
+}
 
 // Label layout: "S008478_5127 #   20.10.2026   Мест: 1/1"  /  "46215 - Кобзуненко Олександр"
 function parseLabelText(txt) {
   const t = String(txt || '');
   const codes = [...t.matchAll(/(?<!\d)(\d{5})\s*[-–—~]\s*\S/g)].map(m => m[1]);
   const last4 = [...t.matchAll(/(?<!\d)(\d{4})\s*#/g)].map(m => m[1]);
-  const full = [...t.matchAll(/[S$5]\s?(\d{6})[\s_]+(\d{4})\s*#/g)].map(m => 'S' + m[1] + m[2]);
+  const full = [...t.matchAll(/(?<![\dA-Za-z])[S$53]?\s?(00\d{4})[\s_]+(\d{4})\s*#/g)].map(m => 'S' + m[1] + m[2]);
   const pm = t.match(/(?<![\d.\/])(\d{1,2})\s*\/\s*(\d{1,2})(?![\d.\/])/);
   const places = pm && +pm[1] >= 1 && +pm[1] <= +pm[2] ? pm[1] + '/' + pm[2] : null;
-  return { codes, last4, full, places };
+  const center = /PA\s?\d{7,}/.test(t);
+  return { codes, last4, full, places, center };
 }
 
-async function readLabel(canvas) {
+function newLabelAcc() { return { codes: [], last4: [], full: [], places: null, center: false, boxes: [] }; }
+function mergeLabel(acc, r) {
+  ['codes', 'last4', 'full'].forEach(k => r[k].forEach(v => { if (!acc[k].includes(v)) acc[k].push(v); }));
+  if (!acc.places && r.places) acc.places = r.places;
+  acc.center = acc.center || r.center;
+  (r.boxes || []).forEach(b => { if (!acc.boxes.some(x => x.kind === b.kind && x.value === b.value)) acc.boxes.push(b); });
+  return acc;
+}
+
+// Boxes (in source-canvas coordinates) for the words that carry the code / order digits
+function boxesFromData(data, r, map) {
+  const out = [];
+  (data.blocks || []).forEach(bl => (bl.paragraphs || []).forEach(pa => (pa.lines || []).forEach(li => (li.words || []).forEach(w => {
+    const t = String(w.text || ''), digits = t.replace(/\D/g, '');
+    let kind = null, value = null;
+    if (r.codes.includes(digits)) { kind = 'code'; value = digits; }
+    else { const l = r.last4.find(x => digits.length >= 4 && digits.endsWith(x)); if (l) { kind = 'order'; value = l; } }
+    if (!kind || out.some(x => x.kind === kind && x.value === value)) return;
+    const [ax, ay] = map(w.bbox.x0, w.bbox.y0), [bx, by] = map(w.bbox.x1, w.bbox.y1);
+    out.push({ kind, value, x0: Math.min(ax, bx), y0: Math.min(ay, by), x1: Math.max(ax, bx), y1: Math.max(ay, by) });
+  }))));
+  return out;
+}
+
+// Several passes, stops as soon as want(acc) is satisfied:
+// block mode → sparse mode → centre ×2 (both modes) → upside down (both modes)
+async function readLabel(canvas, want, quick) {
   const w = await loadOcr();
-  let r = parseLabelText((await w.recognize(canvas)).data.text);
-  if (!r.codes.length && !r.last4.length) {                 // label upside down?
-    const r2 = parseLabelText((await w.recognize(rotate180(canvas))).data.text);
-    if (r2.codes.length || r2.last4.length) r = r2;
+  const acc = newLabelAcc();
+  const W = canvas.width, H = canvas.height;
+  const cw = Math.round(W * 0.75), ch = Math.round(H * 0.75), cx = (W - cw) >> 1, cy = (H - ch) >> 1;
+  let zoom = null, rot = null;
+  const passes = [
+    { psm: '6',  img: () => canvas, map: (x, y) => [x, y] },
+    { psm: '11', img: () => canvas, map: (x, y) => [x, y] },
+    { psm: '6',  img: () => zoom || (zoom = cropScale(canvas, cx, cy, cw, ch, 2)), map: (x, y) => [cx + x / 2, cy + y / 2] },
+    { psm: '11', img: () => zoom || (zoom = cropScale(canvas, cx, cy, cw, ch, 2)), map: (x, y) => [cx + x / 2, cy + y / 2] },
+    { psm: '6',  img: () => rot || (rot = rotate180(canvas)), map: (x, y) => [W - x, H - y] },
+    { psm: '11', img: () => rot || (rot = rotate180(canvas)), map: (x, y) => [W - x, H - y] },
+  ].slice(0, quick ? 3 : 6);
+  for (const p of passes) {
+    await w.setParameters({ tessedit_pageseg_mode: p.psm });
+    const { data } = await w.recognize(p.img(), {}, { text: true, blocks: true, hocr: false, tsv: false });
+    const r = parseLabelText(data.text);
+    r.boxes = boxesFromData(data, r, p.map);
+    mergeLabel(acc, r);
+    if (want(acc)) break;
   }
-  return r;
+  return acc;
 }
 
 // Codes that exist in the client book (unique clients)
@@ -2214,72 +2277,204 @@ function clientsForCodes(codes) {
   });
   return out;
 }
+const wantClient = r => clientsForCodes(r.codes).length > 0;
 
-function setOcrStatus(text) {
-  const el = document.getElementById('modal-ocr-status');
-  el.style.display = text ? 'block' : 'none'; el.textContent = text || '';
+// ---------- Lens panel: snapshot + running dots + highlighted code ----------
+const $l = id => document.getElementById(id);
+let lensDotsTimer = null, lensLiveTimer = null, lensLiveBusy = false, lensLiveDeadline = 0, lensWant = null, lensOnResult = null;
+
+function lensShowCanvas(src) {
+  const c = $l('lens-canvas'); c.width = src.width; c.height = src.height;
+  c.getContext('2d').drawImage(src, 0, 0);
+  c.style.display = 'block'; $l('lens-video').style.display = 'none'; $l('lens').style.display = 'block';
+}
+function lensDots(on) {
+  const d = $l('lens-dots');
+  if (on && !d.children.length) for (let i = 0; i < 24; i++) { const e = document.createElement('i'); e.style.animationDelay = (-Math.random() * 1.6).toFixed(2) + 's'; d.appendChild(e); }
+  const shuffle = () => [...d.children].forEach(e => { e.style.left = (8 + Math.random() * 84) + '%'; e.style.top = (10 + Math.random() * 80) + '%'; });
+  clearInterval(lensDotsTimer); lensDotsTimer = null;
+  d.classList.toggle('on', !!on);
+  if (on) { shuffle(); lensDotsTimer = setInterval(shuffle, 1600); }
+}
+function lensCap(html) { $l('lens-cap').innerHTML = html; }
+function lensHide() { lensDots(false); $l('lens').style.display = 'none'; $l('lens-other').style.display = 'none'; lensCap(''); }
+function lensOtherBtn(show) { $l('lens-other').style.display = show && stream ? 'block' : 'none'; }
+
+// Zoom onto the found words and draw coloured frames (green = client code, blue = order number)
+function lensZoom(src, boxes) {
+  if (!boxes || !boxes.length) { lensShowCanvas(src); return; }
+  let x0 = Math.min(...boxes.map(b => b.x0)), y0 = Math.min(...boxes.map(b => b.y0));
+  let x1 = Math.max(...boxes.map(b => b.x1)), y1 = Math.max(...boxes.map(b => b.y1));
+  const bw = x1 - x0;
+  x0 = Math.max(0, x0 - 30); y0 = Math.max(0, y0 - 25);
+  x1 = Math.min(src.width, x1 + Math.max(300, bw * 3)); y1 = Math.min(src.height, y1 + 30);
+  const k = Math.min(2, 1400 / (x1 - x0));
+  const c = $l('lens-canvas'); c.width = Math.round((x1 - x0) * k); c.height = Math.round((y1 - y0) * k);
+  const ctx = c.getContext('2d');
+  ctx.drawImage(src, x0, y0, x1 - x0, y1 - y0, 0, 0, c.width, c.height);
+  boxes.forEach(b => {
+    ctx.strokeStyle = b.kind === 'code' ? '#00d4aa' : '#4da3ff'; ctx.lineWidth = Math.max(3, 2 * k);
+    ctx.shadowColor = ctx.strokeStyle; ctx.shadowBlur = 8;
+    ctx.strokeRect((b.x0 - x0 - 4) * k, (b.y0 - y0 - 4) * k, (b.x1 - b.x0 + 8) * k, (b.y1 - b.y0 + 8) * k);
+  });
+  c.style.display = 'block'; $l('lens-video').style.display = 'none'; $l('lens').style.display = 'block';
 }
 
-// "Order not in registry" modal: try to fill the client from the label
-async function ocrForManualModal(isManual) {
-  const fresh = lastOcr && Date.now() - lastOcr.at < 60000 ? lastOcr : null;
-  const canvas = fresh ? null : (isManual ? null : snapshotCamera());
-  if (!fresh && !canvas) return;
-  const token = ++ocrModalToken;
-  setOcrStatus('🔤 Читаю бірку…');
-  let r;
-  try { r = fresh || await readLabel(canvas); }
-  catch (e) { if (token === ocrModalToken) setOcrStatus('🔤 Розпізнавання недоступне — введи вручну'); return; }
-  lastOcr = null;
-  if (token !== ocrModalToken || editTarget) return;           // modal closed or reused
+// Live camera inside the lens; reads every ~2 s until want(result) or 30 s
+function startLensLive(want, onResult, caption) {
+  if (!stream) return false;
+  const v = $l('lens-video'); v.srcObject = stream; v.play().catch(() => {});
+  v.style.display = 'block'; $l('lens-canvas').style.display = 'none'; $l('lens').style.display = 'block';
+  lensDots(true); lensOtherBtn(false); lensCap(caption);
+  lensWant = want; lensOnResult = onResult; lensLiveDeadline = Date.now() + 30000;
+  clearInterval(lensLiveTimer); lensLiveTimer = setInterval(lensLiveTick, 700);
+  return true;
+}
+async function lensLiveTick() {
+  if (lensLiveBusy || !lensLiveTimer) return;
+  if (Date.now() > lensLiveDeadline) {
+    stopLensLive(); lensDots(false); lensOtherBtn(true);
+    lensCap('🔤 Не вдалося прочитати — спробуй ще раз або введи вручну'); return;
+  }
+  const snap = snapshotCamera(); if (!snap) return;
+  lensLiveBusy = true;
+  try {
+    const r = await readLabel(snap, lensWant, true);
+    if (lensLiveTimer && lensWant(r)) { const cb = lensOnResult; stopLensLive(); lensDots(false); cb(r, snap); }
+  } catch (e) {} finally { lensLiveBusy = false; }
+}
+function stopLensLive() {
+  clearInterval(lensLiveTimer); lensLiveTimer = null;
+  const v = $l('lens-video'); if (v) { try { v.pause(); } catch (e) {} v.srcObject = null; }
+}
+
+function setModalMode(mode) {
+  modalMode = mode;
+  const label = mode === 'label';
+  $l('modal-client-input').style.display = label ? 'none' : '';
+  $l('modal-confirm-btn').style.display = label ? 'none' : '';
+  if (label) { $l('modal-client-results').style.display = 'none'; $l('modal-client-selected').style.display = 'none'; $l('modal-numpad-wrap').style.display = 'none'; }
+}
+
+// Fill the client in the "not in registry" modal from what was read
+function applyCodeToModal(r, snap) {
   const found = clientsForCodes(r.codes);
-  const inp = document.getElementById('modal-client-input');
+  lensZoom(snap, r.boxes);
+  const inp = $l('modal-client-input');
   if (found.length === 1) {
     if (!inp.value.trim() && !modalSelectedClient) { inp.value = found[0].code; onClientSearch(found[0].code); }
-    setOcrStatus('🔤 З бірки: ' + found[0].code + ' — перевір ім\'я');
+    lensCap('<b style="color:var(--accent)">🔤 З бірки: ' + found[0].code + '</b> — перевір ім\'я');
   } else if (found.length > 1) {
-    setOcrStatus('🔤 На бірці кілька кодів (' + found.map(c => c.code).join(', ') + ') — вибери вручну');
+    lensCap('🔤 На бірці кілька кодів (' + found.map(c => c.code).join(', ') + ') — вибери вручну');
   } else if (r.codes.length) {
-    setOcrStatus('🔤 Код ' + r.codes[0] + ' з бірки не знайдено в базі клієнтів');
+    lensCap('🔤 Код ' + r.codes[0] + ' не знайдено в базі клієнтів');
   } else {
-    setOcrStatus('🔤 Код на бірці не прочитано — введи вручну');
+    lensCap('🔤 Код клієнта на цьому боці не видно');
   }
+  lensOtherBtn(found.length !== 1 || true);
+}
+function codeOtherSideHandler(token) {
+  return () => startLensLive(wantClient, (r, s) => { if (token === ocrModalToken) applyCodeToModal(r, s); },
+    '🔄 Покажи бік бірки з <b>кодом клієнта</b>…');
 }
 
-// Button: QR is folded/unreadable — read the order number (and client code) from the label text
-async function readLabelButton() {
-  const canvas = snapshotCamera();
-  if (!canvas) { toast('⚠️ Спершу запусти камеру'); return; }
-  const btn = document.getElementById('btn-ocr');
-  btn.disabled = true; btn.textContent = '🔤 Читаю бірку…';
-  blockScanning(8000);
+// Called from processScan when the QR order is not in the registry
+async function ocrForManualModal(isManual) {
+  if (isManual || editTarget) return;
+  const snap = snapshotCamera(); if (!snap) return;
+  const token = ++ocrModalToken;
+  lensOtherHandler = codeOtherSideHandler(token);
+  lensShowCanvas(snap); lensDots(true); lensOtherBtn(false);
+  lensCap('📸 Кадр зроблено — бірку можна прибрати<br><b>🔤 Читаю бірку…</b>');
   let r;
-  try { r = await readLabel(canvas); }
-  catch (e) { toast('❌ ' + e.message); return; }
-  finally { btn.disabled = false; btn.textContent = '🔤 Читати бірку (QR не читається)'; blockScanning(1500); }
-  lastOcr = Object.assign({ at: Date.now() }, r);
-  const tail = r.places ? '-' + r.places : '';
-  // 1) full order number read and it is in the registry
-  const fullReg = r.full.find(o => findInRegistry(o));
-  if (fullReg) { processScan('LB15-' + fullReg + tail, false, true); return; }
-  // 2) last 4 digits -> search the registry
-  if (r.last4.length) {
-    const l4 = r.last4[0];
-    const matches = [];
-    Object.values(state.registry).forEach(rows => rows.forEach(x => { if (x.order_number.endsWith(l4)) matches.push(x.order_number); }));
-    const uniq = [...new Set(matches)];
-    if (uniq.length === 1) { processScan('LB15-' + uniq[0] + tail, false, true); return; }
-    if (uniq.length > 1) {
-      const inp = document.getElementById('manual-qr'); inp.value = l4; onManualInput(l4);
-      toast('🔤 …' + l4 + ': кілька замовлень — вибери'); return;
+  try { r = await readLabel(snap, wantClient); }
+  catch (e) { if (token === ocrModalToken) { lensDots(false); lensCap('🔤 Розпізнавання недоступне — введи вручну'); } return; }
+  if (token !== ocrModalToken) return;
+  lensDots(false);
+  applyCodeToModal(r, snap);
+}
+
+// Button: QR is folded/unreadable — read order number + client code + places from the label text
+async function readLabelButton() {
+  const snap = snapshotCamera();
+  if (!snap) { toast('⚠️ Спершу запусти камеру'); return; }
+  pendingQR = null; editTarget = null; modalSelectedClient = null;
+  $l('modal-client-input').value = '';
+  setModalMode('label');
+  $l('modal-manual-title').textContent = '🔤 Читаю бірку';
+  $l('modal-order-num').textContent = 'QR не прочитано — читаю текст бірки';
+  $l('modal-manual').classList.add('show');
+  blockScanning(30000);
+  const token = ++ocrModalToken;
+  labelCtx = newLabelAcc();
+  lensShowCanvas(snap); lensDots(true); lensOtherBtn(false);
+  lensCap('📸 Кадр зроблено — бірку можна прибрати<br><b>🔤 Читаю бірку…</b>');
+  let r;
+  try { r = await readLabel(snap, x => x.codes.length > 0 && (x.last4.length > 0 || x.full.length > 0)); }
+  catch (e) { if (token === ocrModalToken) { lensDots(false); lensCap('🔤 Розпізнавання недоступне'); } return; }
+  if (token !== ocrModalToken) return;
+  lensDots(false);
+  mergeLabel(labelCtx, r);
+  lensZoom(snap, r.boxes);
+  resolveLabel(token);
+}
+
+function resolveLabel(token) {
+  const c = labelCtx; if (!c) return;
+  const clients = clientsForCodes(c.codes), client = clients.length === 1 ? clients[0] : null;
+  const tail = c.places ? '-' + c.places : '';
+  // 1) candidates in the registry: full number, else last 4 digits
+  let cands = [];
+  c.full.forEach(o => { const reg = findInRegistry(o); if (reg) cands.push(reg); });
+  if (!cands.length && c.last4.length) Object.entries(state.registry).forEach(([wh, rows]) => rows.forEach(x => {
+    if (c.last4.some(l => x.order_number.endsWith(l))) cands.push({ ...x, warehouse: wh });
+  }));
+  cands = cands.filter((x, i) => cands.findIndex(y => y.order_number === x.order_number) === i);
+  if (client && cands.length > 1) { const mine = cands.filter(x => normName(x.client_name) === normName(client.name)); if (mine.length) cands = mine; }
+
+  if (cands.length === 1) {
+    const o = cands[0];
+    if (client && normName(o.client_name) !== normName(client.name) &&
+        !confirm('Номер ' + fmtOrder(o.order_number) + ' належить клієнту «' + o.client_name + '»,\nа код на бірці ' + client.code + ' — «' + client.name + '».\n\nЗарахувати замовлення «' + o.client_name + '»?')) {
+      lensCap('⚠️ Код і номер не збігаються — перевір бірку'); return;
     }
-    // 3) not in registry: need the full number to record an off-registry parcel
-    if (r.full.length) { processScan('LB15-' + r.full[0] + tail, false, true); return; }
-    lastOcr = null;
-    toast('🔤 …' + l4 + ' немає в реєстрі — введи номер з бірки вручну'); return;
+    closeModal();
+    processScan('LB15-' + o.order_number + tail, false, true);
+    return;
   }
-  lastOcr = null;
-  toast('🔤 Не вдалося прочитати бірку — наведи ближче і рівніше');
+  if (cands.length > 1) {
+    const l4 = c.last4[0]; closeModal();
+    const inp = $l('manual-qr'); inp.value = l4; onManualInput(l4);
+    toast('🔤 …' + l4 + ': кілька замовлень — вибери'); return;
+  }
+  // 2) no order number on this side → read the other side
+  if (!c.last4.length && !c.full.length) {
+    lensOtherHandler = () => startLensLive(x => x.last4.length > 0 || x.full.length > 0, (r, s) => {
+      if (token !== ocrModalToken) return; mergeLabel(labelCtx, r); lensZoom(s, r.boxes); resolveLabel(token);
+    }, '🔄 Покажи бік бірки з <b>номером замовлення</b>…');
+    lensCap('🔤 Номер замовлення не видно' + (client ? ' (клієнт: ' + client.code + ')' : ''));
+    if (!lensOtherHandler()) { lensCap('🔤 Номер замовлення не видно — введи номер вручну'); }
+    return;
+  }
+  // 3) not in the registry → off-registry parcel; partial number kept as "S......1234"
+  const order = c.full[0] || ('S......' + c.last4[0]);
+  const pl = c.places ? c.places.split('/').map(Number) : [null, null];
+  if (pl[0] && state.scans.some(s => s.order_number === order && s.place === pl[0])) {
+    lensCap('⛔ ' + fmtOrder(order) + ' місце ' + c.places + ' вже відскановано'); beep('error'); return;
+  }
+  pendingQR = { order_number: order, place: pl[0], total: pl[1], rawQR: 'OCR:' + order + tail, autoWarehouse: c.center ? 'center' : null };
+  setModalMode('add');
+  $l('modal-manual-title').textContent = '⚠️ Замовлення не знайдено';
+  $l('modal-order-num').textContent = 'З бірки: ' + fmtOrder(order) + (c.places ? ' · місце ' + c.places : '');
+  showModalNumpad();
+  lensOtherHandler = codeOtherSideHandler(token);
+  if (client) {
+    $l('modal-client-input').value = client.code; onClientSearch(client.code);
+    lensCap('<b style="color:var(--accent)">🔤 З бірки: ' + client.code + '</b> — перевір ім\'я');
+  } else {
+    lensCap(c.codes.length ? '🔤 Код ' + c.codes[0] + ' не знайдено в базі клієнтів' : '🔤 Код клієнта не видно — інший бік або вручну');
+  }
+  lensOtherBtn(true);
 }
 
 // ======================== EDIT / DELETE SCANS ========================
@@ -2318,6 +2513,7 @@ function openClientEdit(order_number, warehouse, ts) {
   editTarget = { order_number, warehouse, timestamp: ts || null };
   const list = scansOfTarget();
   if (!list.length) { editTarget = null; return; }
+  ocrModalToken++; stopLensLive(); lensHide(); setModalMode('add');
   pendingQR = null;
   document.getElementById('modal-manual-title').textContent = '✏️ Змінити клієнта';
   document.getElementById('modal-order-num').textContent =
