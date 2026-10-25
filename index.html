@@ -1044,6 +1044,7 @@ loadScript3('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js
     </div>
     <div class="client-name" id="inv-client-name" style="text-transform:uppercase;letter-spacing:0.03em">—</div>
     <div class="order-num" id="inv-invoice-num"></div>
+    <div id="inv-place" style="display:none;font-family:var(--mono);font-size:44px;font-weight:800;line-height:1;margin:2px 0 12px"></div>
     <div class="count-row" id="inv-count-row" style="display:none">
       <div class="count-box">
         <div class="count-num" id="inv-count-got">0</div>
@@ -1076,6 +1077,7 @@ loadScript3('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js
       <div class="stat-lbl">Клієнтів ✓</div>
     </div>
   </div>
+  <div id="inv-places-strip" style="display:none;font-size:13px;color:var(--text2);margin:-4px 0 12px;line-height:1.6"></div>
 
   <!-- Camera buttons -->
   <div class="cam-btns">
@@ -1130,13 +1132,17 @@ loadScript3('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js
       <div class="modal-title" id="modal-manual-title">⚠️ Замовлення не знайдено</div>
       <div class="modal-sub" id="modal-order-num"></div>
       <div id="lens" style="display:none;margin:-6px 0 10px">
-        <div style="position:relative;border-radius:10px;overflow:hidden;border:1px solid var(--border);background:#000">
+        <div id="lens-box" style="position:relative;border-radius:12px;overflow:hidden;border:1px solid var(--border);background:#000">
           <canvas id="lens-canvas" style="display:block;width:100%;max-height:230px;object-fit:contain"></canvas>
-          <video id="lens-video" autoplay playsinline muted style="display:none;width:100%;height:200px;object-fit:cover"></video>
+          <video id="lens-video" autoplay playsinline muted style="display:none;width:100%;height:300px;object-fit:cover"></video>
+          <svg id="lens-tpl" style="display:none;position:absolute;left:0;top:0;width:100%;height:300px;pointer-events:none"></svg>
           <div id="lens-dots" class="lens-dots"></div>
         </div>
-        <div id="lens-cap" style="font-size:14px;color:var(--text2);margin-top:6px;line-height:1.4"></div>
-        <button class="btn btn-secondary btn-full" id="lens-other" style="display:none;margin-top:6px" onclick="lensOtherHandler && lensOtherHandler()">🔄 Інший бік бірки</button>
+        <div id="lens-cap" style="font-size:15px;color:var(--text);margin-top:8px;line-height:1.4"></div>
+        <div style="display:flex;gap:8px;margin-top:8px">
+          <button class="btn btn-secondary" id="lens-other" style="flex:1;display:none" onclick="aimRestart()">🔄 Читати знову</button>
+          <button class="btn btn-secondary" id="lens-manual" style="flex:1;display:none" onclick="aimManual()">⌨ Ввести вручну</button>
+        </div>
       </div>
       <input type="text" id="modal-client-input"
              placeholder="Код або назва клієнта..."
@@ -1178,13 +1184,13 @@ loadScript3('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js
 </div>
 
 <!-- INVOICE COMPLETE MODAL -->
-<div class="modal-overlay" id="modal-inv-complete" style="display:none">
+<div class="modal-overlay" id="modal-inv-complete" style="display:none" onclick="closeInvCompleteModal()">
   <div class="modal" style="text-align:center;border-color:var(--accent);background:rgba(0,212,170,0.08)">
-    <div style="font-size:52px;margin-bottom:6px">✅</div>
-    <div class="modal-title" style="font-size:20px;color:var(--accent);margin-bottom:10px">Всі накладні зібрано!</div>
-    <div id="modal-inv-client" style="font-size:20px;font-weight:800;margin:10px 0;text-transform:uppercase;line-height:1.2"></div>
-    <div id="modal-inv-summary" style="font-size:13px;color:var(--text2);margin-bottom:18px"></div>
-    <button class="btn btn-primary btn-full" style="font-size:16px;padding:14px" onclick="closeInvCompleteModal()">OK ✓</button>
+    <div style="font-size:48px;margin-bottom:4px">✅</div>
+    <div class="modal-title" style="font-size:22px;color:var(--accent);margin-bottom:8px">Накладні зібрано</div>
+    <div id="modal-inv-place" style="font-family:var(--mono);font-size:52px;font-weight:800;line-height:1.1;margin:6px 0"></div>
+    <div id="modal-inv-client" style="font-size:18px;font-weight:700;margin:8px 0 4px;text-transform:uppercase;line-height:1.2"></div>
+    <div id="modal-inv-summary" style="font-size:12px;color:var(--text2)"></div>
   </div>
 </div>
 
@@ -1211,7 +1217,7 @@ const LS = {
   del: k => localStorage.removeItem(k)
 };
 
-const APP_VERSION = 'V5.13';
+const APP_VERSION = 'V5.15';
 
 let state = {
   registry: {}, // { warehouse: [ {order_number, client_name, expected_places} ] }
@@ -1241,6 +1247,7 @@ function loadState() {
   state.clientBook = LS.get('clientBook') || [];
   state.invoices = LS.get('invoices') || {};
   state.invoiceScans = LS.get('invoiceScans') || [];
+  state.invoicePlaces = LS.get('invoicePlaces') || {};
   const savedColMap = LS.get('colMap');
   if (savedColMap) state.colMap = savedColMap;
 }
@@ -1255,6 +1262,7 @@ function saveState() {
   LS.set('clientBook', state.clientBook);
   LS.set('invoices', state.invoices);
   LS.set('invoiceScans', state.invoiceScans);
+  LS.set('invoicePlaces', state.invoicePlaces);
 }
 
 // ======================== PAGE NAV ========================
@@ -2095,7 +2103,7 @@ function closeModal() {
   pendingQR = null;
   editTarget = null;
   ocrModalToken++;
-  stopLensLive(); lensHide(); labelCtx = null; lensOtherHandler = null; setModalMode('add');
+  stopLensLive(); lensHide(); labelCtx = null; lensOtherHandler = null; setModalMode('add'); showClientInput(true);
   document.getElementById('modal-manual-title').textContent = '⚠️ Замовлення не знайдено';
   document.getElementById('modal-confirm-btn').textContent = 'Додати';
   document.getElementById('modal-delete-btn').style.display = 'none';
@@ -2156,12 +2164,15 @@ function switchModalToKeyboard() {
 
 
 // ======================== LABEL OCR (client code / order number) ========================
+// Live camera with a two-window template (order digits / client code). Only the area around
+// the windows is read, continuously, until the needed values are found.
 // Tesseract.js is loaded lazily from CDN; first use downloads a few MB, then it is cached.
 let ocrWorkerPromise = null;
 let ocrModalToken = 0;        // invalidates running OCR when the modal closes / changes
-let labelCtx = null;          // accumulated label data in "QR unreadable" flow
-let lensOtherHandler = null;  // what "🔄 Інший бік бірки" does in the current situation
+let labelCtx = null;          // accumulated label data in the "QR unreadable" flow
+let lensOtherHandler = null;  // kept for closeModal compatibility
 let modalMode = 'add';        // 'add' | 'label'
+let aim = null;               // running live-aim session
 
 function loadOcr() {
   if (ocrWorkerPromise) return ocrWorkerPromise;
@@ -2181,30 +2192,6 @@ function loadOcr() {
   return ocrWorkerPromise;
 }
 
-// Grey, slightly contrasted snapshot of the current camera frame (max 1280 px)
-function snapshotCamera() {
-  const v = document.getElementById('qrVideo');
-  if (!stream || !v || v.readyState < 2 || !v.videoWidth) return null;
-  const k = Math.min(1, 1280 / Math.max(v.videoWidth, v.videoHeight));
-  const c = document.createElement('canvas');
-  c.width = Math.round(v.videoWidth * k); c.height = Math.round(v.videoHeight * k);
-  const ctx = c.getContext('2d');
-  ctx.filter = 'grayscale(1) contrast(1.3)';
-  ctx.drawImage(v, 0, 0, c.width, c.height);
-  return c;
-}
-
-function rotate180(src) {
-  const c = document.createElement('canvas'); c.width = src.width; c.height = src.height;
-  const ctx = c.getContext('2d'); ctx.translate(c.width, c.height); ctx.rotate(Math.PI); ctx.drawImage(src, 0, 0);
-  return c;
-}
-function cropScale(src, x, y, w, hh, k) {
-  const c = document.createElement('canvas'); c.width = Math.round(w * k); c.height = Math.round(hh * k);
-  const ctx = c.getContext('2d'); ctx.imageSmoothingQuality = 'high'; ctx.drawImage(src, x, y, w, hh, 0, 0, c.width, c.height);
-  return c;
-}
-
 // Label layout: "S008478_5127 #   20.10.2026   Мест: 1/1"  /  "46215 - Кобзуненко Олександр"
 function parseLabelText(txt) {
   const t = String(txt || '');
@@ -2213,62 +2200,43 @@ function parseLabelText(txt) {
   const full = [...t.matchAll(/(?<![\dA-Za-z])[S$53]?\s?(00\d{4})[\s_]+(\d{4})\s*#/g)].map(m => 'S' + m[1] + m[2]);
   const pm = t.match(/(?<![\d.\/])(\d{1,2})\s*\/\s*(\d{1,2})(?![\d.\/])/);
   const places = pm && +pm[1] >= 1 && +pm[1] <= +pm[2] ? pm[1] + '/' + pm[2] : null;
-  const center = /PA\s?\d{7,}/.test(t);
+  const center = /PA\s?\d{7,}|\bSH\s?\d{3}\b/.test(t);   // Центр labels: PA… barcode text or SH154
   return { codes, last4, full, places, center };
 }
-
 function newLabelAcc() { return { codes: [], last4: [], full: [], places: null, center: false, boxes: [] }; }
 function mergeLabel(acc, r) {
   ['codes', 'last4', 'full'].forEach(k => r[k].forEach(v => { if (!acc[k].includes(v)) acc[k].push(v); }));
   if (!acc.places && r.places) acc.places = r.places;
   acc.center = acc.center || r.center;
-  (r.boxes || []).forEach(b => { if (!acc.boxes.some(x => x.kind === b.kind && x.value === b.value)) acc.boxes.push(b); });
   return acc;
 }
-
-// Boxes (in source-canvas coordinates) for the words that carry the code / order digits
-function boxesFromData(data, r, map) {
+// Boxes (canvas coordinates) of the words that carry the client code / order digits
+function boxesFromData(data, r) {
   const out = [];
   (data.blocks || []).forEach(bl => (bl.paragraphs || []).forEach(pa => (pa.lines || []).forEach(li => (li.words || []).forEach(w => {
-    const t = String(w.text || ''), digits = t.replace(/\D/g, '');
+    const digits = String(w.text || '').replace(/\D/g, '');
     let kind = null, value = null;
     if (r.codes.includes(digits)) { kind = 'code'; value = digits; }
     else { const l = r.last4.find(x => digits.length >= 4 && digits.endsWith(x)); if (l) { kind = 'order'; value = l; } }
     if (!kind || out.some(x => x.kind === kind && x.value === value)) return;
-    const [ax, ay] = map(w.bbox.x0, w.bbox.y0), [bx, by] = map(w.bbox.x1, w.bbox.y1);
-    out.push({ kind, value, x0: Math.min(ax, bx), y0: Math.min(ay, by), x1: Math.max(ax, bx), y1: Math.max(ay, by) });
+    out.push({ kind, value, x0: w.bbox.x0, y0: w.bbox.y0, x1: w.bbox.x1, y1: w.bbox.y1 });
   }))));
   return out;
 }
-
-// Several passes, stops as soon as want(acc) is satisfied:
-// block mode → sparse mode → centre ×2 (both modes) → upside down (both modes)
-async function readLabel(canvas, want, quick) {
+// Read one strip: block mode first, sparse mode only if nothing useful was found
+async function readStrip(canvas) {
   const w = await loadOcr();
   const acc = newLabelAcc();
-  const W = canvas.width, H = canvas.height;
-  const cw = Math.round(W * 0.75), ch = Math.round(H * 0.75), cx = (W - cw) >> 1, cy = (H - ch) >> 1;
-  let zoom = null, rot = null;
-  const passes = [
-    { psm: '6',  img: () => canvas, map: (x, y) => [x, y] },
-    { psm: '11', img: () => canvas, map: (x, y) => [x, y] },
-    { psm: '6',  img: () => zoom || (zoom = cropScale(canvas, cx, cy, cw, ch, 2)), map: (x, y) => [cx + x / 2, cy + y / 2] },
-    { psm: '11', img: () => zoom || (zoom = cropScale(canvas, cx, cy, cw, ch, 2)), map: (x, y) => [cx + x / 2, cy + y / 2] },
-    { psm: '6',  img: () => rot || (rot = rotate180(canvas)), map: (x, y) => [W - x, H - y] },
-    { psm: '11', img: () => rot || (rot = rotate180(canvas)), map: (x, y) => [W - x, H - y] },
-  ].slice(0, quick ? 3 : 6);
-  for (const p of passes) {
-    await w.setParameters({ tessedit_pageseg_mode: p.psm });
-    const { data } = await w.recognize(p.img(), {}, { text: true, blocks: true, hocr: false, tsv: false });
+  for (const psm of ['6', '11']) {
+    await w.setParameters({ tessedit_pageseg_mode: psm });
+    const { data } = await w.recognize(canvas, {}, { text: true, blocks: true, hocr: false, tsv: false });
     const r = parseLabelText(data.text);
-    r.boxes = boxesFromData(data, r, p.map);
     mergeLabel(acc, r);
-    if (want(acc)) break;
+    acc.boxes = acc.boxes.concat(boxesFromData(data, r).filter(b => !acc.boxes.some(x => x.kind === b.kind && x.value === b.value)));
+    if (acc.codes.length || acc.last4.length) break;
   }
   return acc;
 }
-
-// Codes that exist in the client book (unique clients)
 function clientsForCodes(codes) {
   const out = [];
   codes.forEach(code => {
@@ -2277,146 +2245,210 @@ function clientsForCodes(codes) {
   });
   return out;
 }
-const wantClient = r => clientsForCodes(r.codes).length > 0;
 
-// ---------- Lens panel: snapshot + running dots + highlighted code ----------
-const $l = id => document.getElementById(id);
-let lensDotsTimer = null, lensLiveTimer = null, lensLiveBusy = false, lensLiveDeadline = 0, lensWant = null, lensOnResult = null;
+// ---------- Template geometry (fractions of the live view) ----------
+const TPL_CODE  = { x: 0.06, y: 0.54, w: 0.28, h: 0.10 };   // "42567"
+const TPL_ORDER = { x: 0.33, y: 0.41, w: 0.60, h: 0.10 };   // "8727 #"
+const READ_CODE  = { x: 0.02, y: 0.48, w: 0.70, h: 0.22 };  // code + " - Name" (needed for the pattern)
+const READ_LABEL = { x: 0.02, y: 0.35, w: 0.96, h: 0.35 };  // both lines
 
-function lensShowCanvas(src) {
-  const c = $l('lens-canvas'); c.width = src.width; c.height = src.height;
-  c.getContext('2d').drawImage(src, 0, 0);
-  c.style.display = 'block'; $l('lens-video').style.display = 'none'; $l('lens').style.display = 'block';
+function drawTemplate(mode) {
+  const svg = $l('lens-tpl'), W = $l('lens-video').clientWidth || 358, H = 300;
+  const z = (r) => ({ x: r.x * W, y: r.y * H, w: r.w * W, h: r.h * H });
+  const c = z(TPL_CODE), o = z(TPL_ORDER), orderOn = mode === 'label';
+  const oc = orderOn ? '#4da3ff' : 'rgba(255,255,255,.45)';
+  svg.innerHTML = `<defs><mask id="tplMask"><rect width="${W}" height="${H}" fill="white"/>
+      <rect x="${c.x}" y="${c.y}" width="${c.w}" height="${c.h}" rx="6" fill="black"/>
+      <rect x="${o.x}" y="${o.y}" width="${o.w}" height="${o.h}" rx="6" fill="${orderOn ? 'black' : '#555'}"/></mask></defs>
+    <rect width="${W}" height="${H}" fill="rgba(0,0,0,.62)" mask="url(#tplMask)"/>
+    <rect x="${c.x}" y="${c.y}" width="${c.w}" height="${c.h}" rx="6" fill="none" stroke="#00d4aa" stroke-width="2.5"/>
+    <rect x="${o.x}" y="${o.y}" width="${o.w}" height="${o.h}" rx="6" fill="none" stroke="${oc}" stroke-width="2.5" ${orderOn ? '' : 'stroke-dasharray="6 5"'}/>
+    <text x="${c.x}" y="${c.y + c.h + 16}" fill="#00d4aa" font-size="12" font-weight="700" font-family="sans-serif">код клієнта</text>
+    <text x="${o.x + o.w}" y="${o.y - 7}" fill="${oc}" font-size="12" font-weight="700" text-anchor="end" font-family="sans-serif">${orderOn ? '4 цифри номера' : 'номер — вже є з QR'}</text>`;
 }
+
+// Region of the live view (fractions of the element) → canvas from the real video pixels (object-fit: cover)
+function cropFromVideo(v, R) {
+  const cW = v.clientWidth, cH = v.clientHeight, vW = v.videoWidth, vH = v.videoHeight;
+  if (!cW || !cH || !vW || !vH) return null;
+  const s = Math.max(cW / vW, cH / vH), offX = (vW - cW / s) / 2, offY = (vH - cH / s) / 2;
+  const sx = offX + R.x * cW / s, sy = offY + R.y * cH / s, sw = R.w * cW / s, sh = R.h * cH / s;
+  const zoneH = TPL_CODE.h * cH / s;                              // text height ≈ zone height
+  const k = Math.min(2, Math.max(1, 48 / zoneH));
+  const c = document.createElement('canvas'); c.width = Math.round(sw * k); c.height = Math.round(sh * k);
+  const ctx = c.getContext('2d'); ctx.filter = 'grayscale(1) contrast(1.3)'; ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(v, sx, sy, sw, sh, 0, 0, c.width, c.height);
+  return c;
+}
+
+// ---------- Lens panel helpers ----------
+const $l = id => document.getElementById(id);
+let lensDotsTimer = null;
 function lensDots(on) {
   const d = $l('lens-dots');
-  if (on && !d.children.length) for (let i = 0; i < 24; i++) { const e = document.createElement('i'); e.style.animationDelay = (-Math.random() * 1.6).toFixed(2) + 's'; d.appendChild(e); }
-  const shuffle = () => [...d.children].forEach(e => { e.style.left = (8 + Math.random() * 84) + '%'; e.style.top = (10 + Math.random() * 80) + '%'; });
+  if (on && !d.children.length) for (let i = 0; i < 18; i++) { const e = document.createElement('i'); e.style.animationDelay = (-Math.random() * 1.6).toFixed(2) + 's'; d.appendChild(e); }
+  const shuffle = () => [...d.children].forEach(e => { e.style.left = (6 + Math.random() * 88) + '%'; e.style.top = (38 + Math.random() * 30) + '%'; });
   clearInterval(lensDotsTimer); lensDotsTimer = null;
   d.classList.toggle('on', !!on);
   if (on) { shuffle(); lensDotsTimer = setInterval(shuffle, 1600); }
 }
 function lensCap(html) { $l('lens-cap').innerHTML = html; }
-function lensHide() { lensDots(false); $l('lens').style.display = 'none'; $l('lens-other').style.display = 'none'; lensCap(''); }
-function lensOtherBtn(show) { $l('lens-other').style.display = show && stream ? 'block' : 'none'; }
-
-// Zoom onto the found words and draw coloured frames (green = client code, blue = order number)
+function lensHide() {
+  lensDots(false); $l('lens').style.display = 'none'; $l('lens-tpl').style.display = 'none';
+  $l('lens-other').style.display = 'none'; $l('lens-manual').style.display = 'none'; lensCap('');
+}
+function stopLensLive() { stopAim(); }
+// Frozen result: zoom onto the found words, green frame = client code, blue = order digits
 function lensZoom(src, boxes) {
-  if (!boxes || !boxes.length) { lensShowCanvas(src); return; }
-  let x0 = Math.min(...boxes.map(b => b.x0)), y0 = Math.min(...boxes.map(b => b.y0));
-  let x1 = Math.max(...boxes.map(b => b.x1)), y1 = Math.max(...boxes.map(b => b.y1));
-  const bw = x1 - x0;
-  x0 = Math.max(0, x0 - 30); y0 = Math.max(0, y0 - 25);
-  x1 = Math.min(src.width, x1 + Math.max(300, bw * 3)); y1 = Math.min(src.height, y1 + 30);
-  const k = Math.min(2, 1400 / (x1 - x0));
-  const c = $l('lens-canvas'); c.width = Math.round((x1 - x0) * k); c.height = Math.round((y1 - y0) * k);
-  const ctx = c.getContext('2d');
-  ctx.drawImage(src, x0, y0, x1 - x0, y1 - y0, 0, 0, c.width, c.height);
-  boxes.forEach(b => {
-    ctx.strokeStyle = b.kind === 'code' ? '#00d4aa' : '#4da3ff'; ctx.lineWidth = Math.max(3, 2 * k);
-    ctx.shadowColor = ctx.strokeStyle; ctx.shadowBlur = 8;
-    ctx.strokeRect((b.x0 - x0 - 4) * k, (b.y0 - y0 - 4) * k, (b.x1 - b.x0 + 8) * k, (b.y1 - b.y0 + 8) * k);
-  });
-  c.style.display = 'block'; $l('lens-video').style.display = 'none'; $l('lens').style.display = 'block';
-}
-
-// Live camera inside the lens; reads every ~2 s until want(result) or 30 s
-function startLensLive(want, onResult, caption) {
-  if (!stream) return false;
-  const v = $l('lens-video'); v.srcObject = stream; v.play().catch(() => {});
-  v.style.display = 'block'; $l('lens-canvas').style.display = 'none'; $l('lens').style.display = 'block';
-  lensDots(true); lensOtherBtn(false); lensCap(caption);
-  lensWant = want; lensOnResult = onResult; lensLiveDeadline = Date.now() + 30000;
-  clearInterval(lensLiveTimer); lensLiveTimer = setInterval(lensLiveTick, 700);
-  return true;
-}
-async function lensLiveTick() {
-  if (lensLiveBusy || !lensLiveTimer) return;
-  if (Date.now() > lensLiveDeadline) {
-    stopLensLive(); lensDots(false); lensOtherBtn(true);
-    lensCap('🔤 Не вдалося прочитати — спробуй ще раз або введи вручну'); return;
+  const c = $l('lens-canvas');
+  if (!boxes || !boxes.length) { c.width = src.width; c.height = src.height; c.getContext('2d').drawImage(src, 0, 0); }
+  else {
+    let x0 = Math.min(...boxes.map(b => b.x0)), y0 = Math.min(...boxes.map(b => b.y0));
+    let x1 = Math.max(...boxes.map(b => b.x1)), y1 = Math.max(...boxes.map(b => b.y1));
+    const bw = x1 - x0;
+    x0 = Math.max(0, x0 - 30); y0 = Math.max(0, y0 - 25);
+    x1 = Math.min(src.width, x1 + Math.max(300, bw * 3)); y1 = Math.min(src.height, y1 + 30);
+    const k = Math.min(2, 1400 / (x1 - x0));
+    c.width = Math.round((x1 - x0) * k); c.height = Math.round((y1 - y0) * k);
+    const ctx = c.getContext('2d');
+    ctx.drawImage(src, x0, y0, x1 - x0, y1 - y0, 0, 0, c.width, c.height);
+    boxes.forEach(b => {
+      ctx.strokeStyle = b.kind === 'code' ? '#00d4aa' : '#4da3ff'; ctx.lineWidth = Math.max(3, 2 * k);
+      ctx.shadowColor = ctx.strokeStyle; ctx.shadowBlur = 8;
+      ctx.strokeRect((b.x0 - x0 - 4) * k, (b.y0 - y0 - 4) * k, (b.x1 - b.x0 + 8) * k, (b.y1 - b.y0 + 8) * k);
+    });
   }
-  const snap = snapshotCamera(); if (!snap) return;
-  lensLiveBusy = true;
-  try {
-    const r = await readLabel(snap, lensWant, true);
-    if (lensLiveTimer && lensWant(r)) { const cb = lensOnResult; stopLensLive(); lensDots(false); cb(r, snap); }
-  } catch (e) {} finally { lensLiveBusy = false; }
-}
-function stopLensLive() {
-  clearInterval(lensLiveTimer); lensLiveTimer = null;
-  const v = $l('lens-video'); if (v) { try { v.pause(); } catch (e) {} v.srcObject = null; }
+  c.style.display = 'block'; $l('lens-video').style.display = 'none'; $l('lens-tpl').style.display = 'none';
+  $l('lens').style.display = 'block';
 }
 
 function setModalMode(mode) {
   modalMode = mode;
   const label = mode === 'label';
-  $l('modal-client-input').style.display = label ? 'none' : '';
   $l('modal-confirm-btn').style.display = label ? 'none' : '';
-  if (label) { $l('modal-client-results').style.display = 'none'; $l('modal-client-selected').style.display = 'none'; $l('modal-numpad-wrap').style.display = 'none'; }
+  if (label) { $l('modal-client-results').style.display = 'none'; $l('modal-client-selected').style.display = 'none'; }
+}
+function showClientInput(show) {
+  $l('modal-client-input').style.display = show ? '' : 'none';
+  if (!show) { $l('modal-numpad-wrap').style.display = 'none'; }
 }
 
-// Fill the client in the "not in registry" modal from what was read
-function applyCodeToModal(r, snap) {
-  const found = clientsForCodes(r.codes);
-  lensZoom(snap, r.boxes);
+// ---------- Live aiming session ----------
+// mode 'code'  : QR was read, order is known → only the client code is needed
+// mode 'label' : QR unreadable → order digits (+ client code) are needed
+function startAim(mode, token) {
+  stopAim();
+  if (!stream) return false;
+  aim = { mode, token, acc: newLabelAcc(), busy: false, deadline: Date.now() + 45000, firstL4At: 0, timer: null };
+  const v = $l('lens-video'); v.srcObject = stream; v.play().catch(() => {});
+  $l('lens-canvas').style.display = 'none'; v.style.display = 'block';
+  $l('lens').style.display = 'block'; $l('lens-tpl').style.display = 'block';
+  requestAnimationFrame(() => drawTemplate(mode));
+  $l('lens-other').style.display = 'none'; $l('lens-manual').style.display = 'block';
+  showClientInput(false);
+  lensDots(true);
+  lensCap(mode === 'code'
+    ? 'Наведи <b style="color:#00d4aa">зелене віконце</b> на код клієнта'
+    : 'Наведи віконця на <b style="color:#4da3ff">номер</b> і <b style="color:#00d4aa">код клієнта</b>');
+  aim.timer = setInterval(aimTick, 250);
+  return true;
+}
+function stopAim() {
+  if (aim) { clearInterval(aim.timer); aim = null; }
+  lensDots(false);
+  const v = $l('lens-video'); if (v) { try { v.pause(); } catch (e) {} v.srcObject = null; }
+}
+async function aimTick() {
+  const a = aim; if (!a || a.busy) return;
+  if (a.token !== ocrModalToken) { stopAim(); return; }
+  if (Date.now() > a.deadline) {
+    stopAim(); $l('lens-tpl').style.display = 'none';
+    lensCap('🔤 Не вдалося прочитати — спробуй ще раз або введи вручну');
+    $l('lens-other').style.display = 'block'; return;
+  }
+  const v = $l('lens-video'); if (v.readyState < 2) return;
+  const crop = cropFromVideo(v, a.mode === 'code' ? READ_CODE : READ_LABEL);
+  if (!crop) return;
+  a.busy = true;
+  try {
+    const r = await readStrip(crop);
+    if (aim !== a) return;
+    mergeLabel(a.acc, r);
+    if (r.last4.length && !a.firstL4At) a.firstL4At = Date.now();
+    const clients = clientsForCodes(a.acc.codes);
+    const done = a.mode === 'code'
+      ? clients.length > 0
+      : a.acc.last4.length > 0 && (clients.length > 0 || Date.now() - a.firstL4At > 2500);
+    if (done) { stopAim(); beep('success'); aimFound(a, crop, r); }
+  } catch (e) { console.warn('OCR', e); }
+  finally { a.busy = false; }
+}
+function aimFound(a, crop, r) {
+  lensZoom(crop, r.boxes);
+  $l('lens-manual').style.display = 'none';
+  $l('lens-other').style.display = 'block';
+  if (a.mode === 'code') applyCodeToModal(a.acc);
+  else { labelCtx = a.acc; resolveLabel(a.token); }
+}
+function aimRestart() {
+  if (modalMode === 'label' || !pendingQR) { labelCtx = newLabelAcc(); setModalMode('label'); startAim('label', ocrModalToken); }
+  else {
+    $l('modal-client-input').value = ''; modalSelectedClient = null;
+    $l('modal-client-selected').style.display = 'none'; $l('modal-client-results').style.display = 'none';
+    startAim('code', ocrModalToken);
+  }
+}
+function aimManual() {
+  const wasLabel = modalMode === 'label' || !pendingQR;
+  stopAim(); lensHide();
+  if (wasLabel) {            // no QR → type the order digits in the scanner's manual field
+    closeModal();
+    const inp = $l('manual-qr'); inp.value = ''; showNumpad();
+    toast('⌨ Введи останні 4 цифри номера'); return;
+  }
+  showClientInput(true); showModalNumpad();
+}
+
+// Fill the client in the "not in registry" modal
+function applyCodeToModal(acc) {
+  const found = clientsForCodes(acc.codes);
+  showClientInput(true);
   const inp = $l('modal-client-input');
   if (found.length === 1) {
-    if (!inp.value.trim() && !modalSelectedClient) { inp.value = found[0].code; onClientSearch(found[0].code); }
+    inp.value = found[0].code; onClientSearch(found[0].code);
     lensCap('<b style="color:var(--accent)">🔤 З бірки: ' + found[0].code + '</b> — перевір ім\'я');
   } else if (found.length > 1) {
-    lensCap('🔤 На бірці кілька кодів (' + found.map(c => c.code).join(', ') + ') — вибери вручну');
-  } else if (r.codes.length) {
-    lensCap('🔤 Код ' + r.codes[0] + ' не знайдено в базі клієнтів');
-  } else {
-    lensCap('🔤 Код клієнта на цьому боці не видно');
+    lensCap('🔤 Прочитано кілька кодів (' + found.map(c => c.code).join(', ') + ') — вибери вручну');
+    showModalNumpad();
   }
-  lensOtherBtn(found.length !== 1 || true);
-}
-function codeOtherSideHandler(token) {
-  return () => startLensLive(wantClient, (r, s) => { if (token === ocrModalToken) applyCodeToModal(r, s); },
-    '🔄 Покажи бік бірки з <b>кодом клієнта</b>…');
 }
 
 // Called from processScan when the QR order is not in the registry
-async function ocrForManualModal(isManual) {
-  if (isManual || editTarget) return;
-  const snap = snapshotCamera(); if (!snap) return;
+function ocrForManualModal(isManual) {
+  if (isManual || editTarget || !stream) return;
   const token = ++ocrModalToken;
-  lensOtherHandler = codeOtherSideHandler(token);
-  lensShowCanvas(snap); lensDots(true); lensOtherBtn(false);
-  lensCap('📸 Кадр зроблено — бірку можна прибрати<br><b>🔤 Читаю бірку…</b>');
-  let r;
-  try { r = await readLabel(snap, wantClient); }
-  catch (e) { if (token === ocrModalToken) { lensDots(false); lensCap('🔤 Розпізнавання недоступне — введи вручну'); } return; }
-  if (token !== ocrModalToken) return;
-  lensDots(false);
-  applyCodeToModal(r, snap);
+  setTimeout(() => {
+    if (token !== ocrModalToken) return;
+    showClientInput(false);
+    startAim('code', token);
+    loadOcr().catch(() => { if (token === ocrModalToken) { stopAim(); lensHide(); showClientInput(true); showModalNumpad(); toast('⚠️ Розпізнавання недоступне — введи вручну'); } });
+  }, 60);
 }
 
-// Button: QR is folded/unreadable — read order number + client code + places from the label text
-async function readLabelButton() {
-  const snap = snapshotCamera();
-  if (!snap) { toast('⚠️ Спершу запусти камеру'); return; }
+// Button: QR is folded/unreadable — aim at the order digits + client code
+function readLabelButton() {
+  if (!stream) { toast('⚠️ Спершу запусти камеру'); return; }
   pendingQR = null; editTarget = null; modalSelectedClient = null;
   $l('modal-client-input').value = '';
   setModalMode('label');
   $l('modal-manual-title').textContent = '🔤 Читаю бірку';
   $l('modal-order-num').textContent = 'QR не прочитано — читаю текст бірки';
   $l('modal-manual').classList.add('show');
-  blockScanning(30000);
+  blockScanning(60000);
   const token = ++ocrModalToken;
   labelCtx = newLabelAcc();
-  lensShowCanvas(snap); lensDots(true); lensOtherBtn(false);
-  lensCap('📸 Кадр зроблено — бірку можна прибрати<br><b>🔤 Читаю бірку…</b>');
-  let r;
-  try { r = await readLabel(snap, x => x.codes.length > 0 && (x.last4.length > 0 || x.full.length > 0)); }
-  catch (e) { if (token === ocrModalToken) { lensDots(false); lensCap('🔤 Розпізнавання недоступне'); } return; }
-  if (token !== ocrModalToken) return;
-  lensDots(false);
-  mergeLabel(labelCtx, r);
-  lensZoom(snap, r.boxes);
-  resolveLabel(token);
+  startAim('label', token);
+  loadOcr().catch(() => { if (token === ocrModalToken) { closeModal(); toast('⚠️ Розпізнавання недоступне'); } });
 }
 
 function resolveLabel(token) {
@@ -2447,16 +2479,7 @@ function resolveLabel(token) {
     const inp = $l('manual-qr'); inp.value = l4; onManualInput(l4);
     toast('🔤 …' + l4 + ': кілька замовлень — вибери'); return;
   }
-  // 2) no order number on this side → read the other side
-  if (!c.last4.length && !c.full.length) {
-    lensOtherHandler = () => startLensLive(x => x.last4.length > 0 || x.full.length > 0, (r, s) => {
-      if (token !== ocrModalToken) return; mergeLabel(labelCtx, r); lensZoom(s, r.boxes); resolveLabel(token);
-    }, '🔄 Покажи бік бірки з <b>номером замовлення</b>…');
-    lensCap('🔤 Номер замовлення не видно' + (client ? ' (клієнт: ' + client.code + ')' : ''));
-    if (!lensOtherHandler()) { lensCap('🔤 Номер замовлення не видно — введи номер вручну'); }
-    return;
-  }
-  // 3) not in the registry → off-registry parcel; partial number kept as "S......1234"
+  // 2) not in the registry → off-registry parcel; partial number kept as "S......1234"
   const order = c.full[0] || ('S......' + c.last4[0]);
   const pl = c.places ? c.places.split('/').map(Number) : [null, null];
   if (pl[0] && state.scans.some(s => s.order_number === order && s.place === pl[0])) {
@@ -2466,15 +2489,14 @@ function resolveLabel(token) {
   setModalMode('add');
   $l('modal-manual-title').textContent = '⚠️ Замовлення не знайдено';
   $l('modal-order-num').textContent = 'З бірки: ' + fmtOrder(order) + (c.places ? ' · місце ' + c.places : '');
-  showModalNumpad();
-  lensOtherHandler = codeOtherSideHandler(token);
+  showClientInput(true);
   if (client) {
     $l('modal-client-input').value = client.code; onClientSearch(client.code);
     lensCap('<b style="color:var(--accent)">🔤 З бірки: ' + client.code + '</b> — перевір ім\'я');
   } else {
-    lensCap(c.codes.length ? '🔤 Код ' + c.codes[0] + ' не знайдено в базі клієнтів' : '🔤 Код клієнта не видно — інший бік або вручну');
+    lensCap('🔤 Код клієнта не прочитано — «Читати знову» або введи вручну');
+    showModalNumpad();
   }
-  lensOtherBtn(true);
 }
 
 // ======================== EDIT / DELETE SCANS ========================
@@ -2513,7 +2535,7 @@ function openClientEdit(order_number, warehouse, ts) {
   editTarget = { order_number, warehouse, timestamp: ts || null };
   const list = scansOfTarget();
   if (!list.length) { editTarget = null; return; }
-  ocrModalToken++; stopLensLive(); lensHide(); setModalMode('add');
+  ocrModalToken++; stopLensLive(); lensHide(); setModalMode('add'); showClientInput(true);
   pendingQR = null;
   document.getElementById('modal-manual-title').textContent = '✏️ Змінити клієнта';
   document.getElementById('modal-order-num').textContent =
@@ -3106,11 +3128,13 @@ function clearSession() {
   state.registryDates = {};
   state.invoices = {};
   state.invoiceScans = [];
+  state.invoicePlaces = {};
   LS.del('registry');
   LS.del('scans');
   LS.del('registryDates');
   LS.del('invoices');
   LS.del('invoiceScans');
+  LS.del('invoicePlaces');
   document.getElementById('session-date').textContent = '';
   document.getElementById('date-warning').style.display = 'none';
   stopCamera();
@@ -3775,12 +3799,23 @@ function processInvoiceScan(raw, forced) {
   const allClientInv = getAllClientInvoices(inv.client_name);
   const total = allClientInv.length;
 
+  // Place on the table for clients with several invoices: lowest free number, freed when complete
+  const pKey = invPlaceKey(inv.client_name);
+  const already = getScannedClientInvoices(inv.client_name).length;
+  let place = null;
+  if (total > 1) {
+    place = state.invoicePlaces[pKey] || null;
+    if (!place) { place = lowestFreePlace(); state.invoicePlaces[pKey] = place; }
+    if (already + 1 >= total) delete state.invoicePlaces[pKey];
+  }
+
   // Record
   state.invoiceScans.push({
     invoice_number: siNum,
     client_name: inv.client_name,
     order_number: inv.order_number,
     warehouse: inv.warehouse,
+    place,
     timestamp: Date.now()
   });
   saveState();
@@ -3798,18 +3833,20 @@ function processInvoiceScan(raw, forced) {
     showInvStatus('yellow', '🟡 Єдина накладна — відкласти', inv.client_name, siNum, 1, 1);
   } else if (scanned >= total) {
     beep('success'); setTimeout(() => beep('success'), 180); setTimeout(() => beep('success'), 360);
-    showInvStatus('green', '✅ Всі накладні зібрано!', inv.client_name, siNum, scanned, total);
-    showInvCompleteModal(inv.client_name, total);
+    showInvStatus('green', '✅ Накладні зібрано', inv.client_name, siNum, scanned, total, place);
+    showInvCompleteModal(inv.client_name, total, place);
   } else {
     beep(scanned === 1 ? 'success' : 'info');
     const lbl = scanned === 1
-      ? `🟢 Перша з ${total} — ще ${remaining} у купку`
+      ? `🟢 Перша з ${total} — ще ${remaining}`
       : `🔵 Накладна ${scanned} з ${total} — ще ${remaining}`;
-    showInvStatus(scanned === 1 ? 'green' : 'blue', lbl, inv.client_name, siNum, scanned, total);
+    showInvStatus(scanned === 1 ? 'green' : 'blue', lbl, inv.client_name, siNum, scanned, total, place);
   }
 }
 
-function showInvStatus(color, label, clientName, siNum, scanned, total) {
+function showInvStatus(color, label, clientName, siNum, scanned, total, place) {
+  const pe = document.getElementById('inv-place');
+  if (place) { pe.style.display = 'block'; pe.textContent = 'МІСЦЕ ' + place; } else pe.style.display = 'none';
   const block = document.getElementById('inv-status-block');
   block.className = 'status-block ' + (color || 'idle');
   document.getElementById('inv-status-label').textContent = label || '';
@@ -3830,18 +3867,43 @@ function showInvStatus(color, label, clientName, siNum, scanned, total) {
   }
 }
 
-function showInvCompleteModal(clientName, total) {
+let invCompleteTimer = null;
+function showInvCompleteModal(clientName, total, place) {
   document.getElementById('modal-inv-client').textContent = clientName;
+  document.getElementById('modal-inv-place').textContent = place ? 'Місце ' + place : '';
   const w = total < 2 ? 'накладна' : total < 5 ? 'накладні' : 'накладних';
-  document.getElementById('modal-inv-summary').textContent = 'Всі ' + total + ' ' + w + ' зібрано ✓';
+  document.getElementById('modal-inv-summary').textContent = total + ' ' + w;
   document.getElementById('modal-inv-complete').style.display = 'flex';
   invBlockScanning(30000);
+  clearTimeout(invCompleteTimer);
+  invCompleteTimer = setTimeout(closeInvCompleteModal, 2000);      // closes by itself
 }
 
 function closeInvCompleteModal() {
+  clearTimeout(invCompleteTimer); invCompleteTimer = null;
   document.getElementById('modal-inv-complete').style.display = 'none';
-  invBlockScanning(1500);
+  invBlockScanning(700);
   invLastScanned = '';
+}
+
+// ---- Numbered places on the table ----
+function invPlaceKey(name) { return String(name || '').toLowerCase().replace(/\s+/g, ' ').trim(); }
+function lowestFreePlace() {
+  const used = new Set(Object.values(state.invoicePlaces || {}));
+  let n = 1; while (used.has(n)) n++;
+  return n;
+}
+function renderInvPlacesStrip() {
+  const el = document.getElementById('inv-places-strip'); if (!el) return;
+  const entries = Object.entries(state.invoicePlaces || {}).sort((a, b) => a[1] - b[1]);
+  if (!entries.length) { el.style.display = 'none'; return; }
+  el.style.display = 'block';
+  el.innerHTML = 'Зайняті місця: ' + entries.map(([key, n]) => {
+    const scans = state.invoiceScans.filter(s => invPlaceKey(s.client_name) === key);
+    const name = scans.length ? scans[0].client_name : key;
+    const total = getAllClientInvoices(name).length;
+    return '<b style="color:var(--text)">' + n + '</b>&nbsp;·&nbsp;' + name.split(' ')[0] + '&nbsp;' + scans.length + '/' + total;
+  }).join('&nbsp;&nbsp; ');
 }
 
 function invManualScan() {
@@ -3870,6 +3932,7 @@ function updateInvStats() {
   document.getElementById('inv-stat-done').textContent = done;
 
   // Registry hint
+  renderInvPlacesStrip();
   const hint = document.getElementById('inv-registry-hint');
   if (hint) hint.textContent = totalInv > 0 ? Object.keys(state.invoices).map(wh => getWhName(wh) + ': ' + (state.invoices[wh]||[]).length).join(' · ') : '';
 }
@@ -3892,7 +3955,7 @@ function renderInvRecentScans() {
         <div class="scan-item-name">${s.client_name||'—'}</div>
         <div class="scan-item-order">${s.invoice_number}</div>
       </div>
-      <div class="scan-item-count" style="font-family:var(--mono);font-size:12px">${sc}/${t}</div>
+      <div class="scan-item-count" style="font-family:var(--mono);font-size:12px;text-align:right">${s.place ? '<b style="font-size:15px;color:var(--text)">М' + s.place + '</b><br>' : ''}${sc}/${t}</div>
     </div>`;
   }).join('');
 }
