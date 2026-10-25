@@ -1217,7 +1217,7 @@ const LS = {
   del: k => localStorage.removeItem(k)
 };
 
-const APP_VERSION = 'V5.15';
+const APP_VERSION = 'V5.16';
 
 let state = {
   registry: {}, // { warehouse: [ {order_number, client_name, expected_places} ] }
@@ -2224,7 +2224,7 @@ function boxesFromData(data, r) {
   return out;
 }
 // Read one strip: block mode first, sparse mode only if nothing useful was found
-async function readStrip(canvas) {
+async function readStrip(canvas, needOrder) {
   const w = await loadOcr();
   const acc = newLabelAcc();
   for (const psm of ['6', '11']) {
@@ -2233,7 +2233,8 @@ async function readStrip(canvas) {
     const r = parseLabelText(data.text);
     mergeLabel(acc, r);
     acc.boxes = acc.boxes.concat(boxesFromData(data, r).filter(b => !acc.boxes.some(x => x.kind === b.kind && x.value === b.value)));
-    if (acc.codes.length || acc.last4.length) break;
+    const okCode = clientsForCodes(acc.codes).length > 0;
+    if (needOrder ? (okCode && acc.last4.length) : okCode) break;   // run the 2nd mode only if something is missing
   }
   return acc;
 }
@@ -2322,6 +2323,15 @@ function lensZoom(src, boxes) {
   $l('lens').style.display = 'block';
 }
 
+// Several pieces (each zoomed to its own words) one under another
+function lensStack(parts) {
+  const tmp = parts.map(p => { lensZoom(p.src, p.boxes); const c = $l('lens-canvas'); const k = document.createElement('canvas'); k.width = c.width; k.height = c.height; k.getContext('2d').drawImage(c, 0, 0); return k; });
+  const W = Math.max(...tmp.map(c => c.width)), gap = 8;
+  const c = $l('lens-canvas'); c.width = W; c.height = tmp.reduce((s, x) => s + x.height, 0) + gap * (tmp.length - 1);
+  const ctx = c.getContext('2d'); ctx.fillStyle = '#000'; ctx.fillRect(0, 0, c.width, c.height);
+  let y = 0; tmp.forEach(x => { ctx.drawImage(x, 0, y); y += x.height + gap; });
+}
+
 function setModalMode(mode) {
   modalMode = mode;
   const label = mode === 'label';
@@ -2339,7 +2349,7 @@ function showClientInput(show) {
 function startAim(mode, token) {
   stopAim();
   if (!stream) return false;
-  aim = { mode, token, acc: newLabelAcc(), busy: false, deadline: Date.now() + 45000, firstL4At: 0, timer: null };
+  aim = { mode, token, acc: newLabelAcc(), busy: false, deadline: Date.now() + 45000, firstL4At: 0, firstBothAt: 0, timer: null, bestCode: null, bestOrder: null };
   const v = $l('lens-video'); v.srcObject = stream; v.play().catch(() => {});
   $l('lens-canvas').style.display = 'none'; v.style.display = 'block';
   $l('lens').style.display = 'block'; $l('lens-tpl').style.display = 'block';
@@ -2371,20 +2381,32 @@ async function aimTick() {
   if (!crop) return;
   a.busy = true;
   try {
-    const r = await readStrip(crop);
+    const r = await readStrip(crop, a.mode === 'label');
     if (aim !== a) return;
     mergeLabel(a.acc, r);
+    const codeBox = r.boxes.some(b => b.kind === 'code' && clientsForCodes([b.value]).length);
+    const orderBox = r.boxes.some(b => b.kind === 'order');
+    if (codeBox) a.bestCode = { src: crop, boxes: r.boxes.filter(b => b.kind === 'code') };
+    if (orderBox) a.bestOrder = { src: crop, boxes: r.boxes.filter(b => b.kind === 'order') };
     if (r.last4.length && !a.firstL4At) a.firstL4At = Date.now();
     const clients = clientsForCodes(a.acc.codes);
-    const done = a.mode === 'code'
-      ? clients.length > 0
-      : a.acc.last4.length > 0 && (clients.length > 0 || Date.now() - a.firstL4At > 2500);
+    if (a.acc.last4.length && clients.length && !a.firstBothAt) a.firstBothAt = Date.now();
+    let done;
+    if (a.mode === 'code') done = clients.length > 0;
+    else {
+      const frameBoth = r.last4.length > 0 && clientsForCodes(r.codes).length > 0;   // one frame shows both
+      done = frameBoth
+        || (a.firstBothAt && Date.now() - a.firstBothAt > 2000)                     // both seen, but in different frames
+        || (a.acc.last4.length > 0 && !clients.length && Date.now() - a.firstL4At > 3000);  // number only
+    }
     if (done) { stopAim(); beep('success'); aimFound(a, crop, r); }
   } catch (e) { console.warn('OCR', e); }
   finally { a.busy = false; }
 }
 function aimFound(a, crop, r) {
-  lensZoom(crop, r.boxes);
+  const hasCode = r.boxes.some(b => b.kind === 'code'), hasOrder = r.boxes.some(b => b.kind === 'order');
+  if (a.mode === 'label' && !(hasCode && hasOrder) && (a.bestCode || a.bestOrder)) lensStack([a.bestOrder, a.bestCode].filter(Boolean));
+  else lensZoom(crop, r.boxes);
   $l('lens-manual').style.display = 'none';
   $l('lens-other').style.display = 'block';
   if (a.mode === 'code') applyCodeToModal(a.acc);
@@ -2453,6 +2475,7 @@ function readLabelButton() {
 
 function resolveLabel(token) {
   const c = labelCtx; if (!c) return;
+  c.full = [];   // the grey part of the number is not trusted: only the bold last 4 digits are facts
   const clients = clientsForCodes(c.codes), client = clients.length === 1 ? clients[0] : null;
   const tail = c.places ? '-' + c.places : '';
   // 1) candidates in the registry: full number, else last 4 digits
@@ -2490,11 +2513,12 @@ function resolveLabel(token) {
   $l('modal-manual-title').textContent = '⚠️ Замовлення не знайдено';
   $l('modal-order-num').textContent = 'З бірки: ' + fmtOrder(order) + (c.places ? ' · місце ' + c.places : '');
   showClientInput(true);
+  const numTxt = '<b style="color:#4da3ff">номер …' + order.slice(-4) + '</b>';
   if (client) {
     $l('modal-client-input').value = client.code; onClientSearch(client.code);
-    lensCap('<b style="color:var(--accent)">🔤 З бірки: ' + client.code + '</b> — перевір ім\'я');
+    lensCap('🔤 З бірки: ' + numTxt + ' · <b style="color:var(--accent)">код ' + client.code + '</b> — перевір');
   } else {
-    lensCap('🔤 Код клієнта не прочитано — «Читати знову» або введи вручну');
+    lensCap('🔤 З бірки: ' + numTxt + ' · код клієнта не прочитано — «Читати знову» або введи вручну');
     showModalNumpad();
   }
 }
