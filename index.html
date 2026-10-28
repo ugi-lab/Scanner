@@ -1077,7 +1077,6 @@ loadScript3('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js
       <div class="stat-lbl">Клієнтів ✓</div>
     </div>
   </div>
-  <div id="inv-places-strip" style="display:none;font-size:13px;color:var(--text2);margin:-4px 0 12px;line-height:1.6"></div>
 
   <!-- Camera buttons -->
   <div class="cam-btns">
@@ -1217,7 +1216,7 @@ const LS = {
   del: k => localStorage.removeItem(k)
 };
 
-const APP_VERSION = 'V5.16';
+const APP_VERSION = 'V5.17';
 
 let state = {
   registry: {}, // { warehouse: [ {order_number, client_name, expected_places} ] }
@@ -3849,7 +3848,7 @@ function processInvoiceScan(raw, forced) {
 
   updateInvStats();
   renderInvRecentScans();
-  invBlockScanning(1500);
+  invBlockScanning(2000);
   invLastScanned = siNum;
 
   if (total === 1) {
@@ -3917,18 +3916,6 @@ function lowestFreePlace() {
   let n = 1; while (used.has(n)) n++;
   return n;
 }
-function renderInvPlacesStrip() {
-  const el = document.getElementById('inv-places-strip'); if (!el) return;
-  const entries = Object.entries(state.invoicePlaces || {}).sort((a, b) => a[1] - b[1]);
-  if (!entries.length) { el.style.display = 'none'; return; }
-  el.style.display = 'block';
-  el.innerHTML = 'Зайняті місця: ' + entries.map(([key, n]) => {
-    const scans = state.invoiceScans.filter(s => invPlaceKey(s.client_name) === key);
-    const name = scans.length ? scans[0].client_name : key;
-    const total = getAllClientInvoices(name).length;
-    return '<b style="color:var(--text)">' + n + '</b>&nbsp;·&nbsp;' + name.split(' ')[0] + '&nbsp;' + scans.length + '/' + total;
-  }).join('&nbsp;&nbsp; ');
-}
 
 function invManualScan() {
   const inp = document.getElementById('inv-manual');
@@ -3956,7 +3943,6 @@ function updateInvStats() {
   document.getElementById('inv-stat-done').textContent = done;
 
   // Registry hint
-  renderInvPlacesStrip();
   const hint = document.getElementById('inv-registry-hint');
   if (hint) hint.textContent = totalInv > 0 ? Object.keys(state.invoices).map(wh => getWhName(wh) + ': ' + (state.invoices[wh]||[]).length).join(' · ') : '';
 }
@@ -4051,6 +4037,11 @@ async function invScanLoop() {
     if (siCode) {
       const code = siCode;
       const now = Date.now();
+      // Same invoice still in front of the camera (scanned last, < 60 s ago): ignore silently,
+      // so the "МІСЦЕ N" message is not replaced by "вже відскановано"
+      const si = extractSINumber(code);
+      const last = state.invoiceScans[state.invoiceScans.length - 1];
+      if (si && last && last.invoice_number === si && now - last.timestamp < 60000) return;
       if (code !== invLastScanned || now - invLastScannedTime > 1500) {
         invLastScanned = code;
         invLastScannedTime = now;
