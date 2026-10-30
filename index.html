@@ -251,6 +251,12 @@ loadScript3('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js
   .btn-secondary:hover { border-color: var(--accent); color: var(--accent); }
   .btn-danger { background: rgba(255,77,77,0.15); color: var(--red); border: 1px solid rgba(255,77,77,0.3); }
   .btn-danger:hover { background: rgba(255,77,77,0.25); }
+  /* Hold-to-confirm button (V5.18) */
+  .hold-btn { position: relative; overflow: hidden; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; touch-action: none; }
+  .hold-btn .hold-fill { position: absolute; left: 0; top: 0; bottom: 0; width: 0; background: rgba(255,77,77,0.55); pointer-events: none; }
+  .hold-btn .hold-label { position: relative; pointer-events: none; color: #fff; }
+  #modal-clear-warn .clear-warn-text { font-size: 22px; font-weight: 800; color: var(--red); text-align: center; line-height: 1.25; margin: 6px 0 18px; text-transform: uppercase; }
+  #modal-clear-warn .clear-warn-sub { font-size: 13px; color: var(--text2); text-align: center; margin-bottom: 16px; }
   .btn-full { width: 100%; }
 
   .imported-list { margin-top: 10px; }
@@ -820,7 +826,7 @@ loadScript3('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js
   </div>
 
   <div style="display:flex;gap:8px">
-    <button class="btn btn-danger btn-full" onclick="clearSession()">🗑 Очистити сесію</button>
+    <button class="btn btn-danger btn-full hold-btn" id="btn-clear-session"><span class="hold-fill"></span><span class="hold-label">🗑 Очистити сесію</span></button>
     <button class="btn btn-secondary btn-full" onclick="showPage('scan')">→ До сканера</button>
   </div>
 
@@ -1020,12 +1026,21 @@ loadScript3('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js
     </div>
   </div>
 
-  <div style="margin-top:16px">
-    <button class="btn btn-danger btn-full" onclick="clearSession()">🗑 Очистити сесію</button>
-  </div>
 </div>
 </div>
 
+
+<!-- ======================== CLEAR WARNING (V5.18) ======================== -->
+<div class="modal-overlay" id="modal-clear-warn">
+  <div class="modal">
+    <div class="clear-warn-text" id="clear-warn-text">⚠ Звіт НЕ надіслано</div>
+    <div class="clear-warn-sub" id="clear-warn-sub"></div>
+    <div style="display:flex;flex-direction:column;gap:10px">
+      <button class="btn btn-danger btn-full hold-btn" id="btn-clear-force" style="padding:14px"><span class="hold-fill"></span><span class="hold-label">Все одно очистити (утримуй 2 с)</span></button>
+      <button class="btn btn-secondary btn-full" style="padding:14px" onclick="closeClearWarn()">Скасувати</button>
+    </div>
+  </div>
+</div>
 
 <!-- ======================== INVOICES PAGE ======================== -->
 <div id="page-invoices" class="page">
@@ -1216,7 +1231,7 @@ const LS = {
   del: k => localStorage.removeItem(k)
 };
 
-const APP_VERSION = 'V5.17';
+const APP_VERSION = 'V5.18';
 
 let state = {
   registry: {}, // { warehouse: [ {order_number, client_name, expected_places} ] }
@@ -1265,7 +1280,13 @@ function saveState() {
 }
 
 // ======================== PAGE NAV ========================
+let currentPage = 'import';
 function showPage(id) {
+  const prevPage = currentPage;
+  currentPage = id;
+  // V5.18: camera follows the tab — on for Сканер / Накл., off elsewhere
+  if (prevPage === 'scan' && id !== 'scan' && stream) stopCamera();
+  if (prevPage === 'invoices' && id !== 'invoices' && invStream) stopInvCamera();
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
   document.getElementById('page-' + id).classList.add('active');
@@ -1279,7 +1300,24 @@ function showPage(id) {
   if (id === 'report') renderReport();
   if (id === 'settings') renderSettings();
   if (id === 'invoices') { updateInvStats(); renderInvRecentScans(); }
+  if (id === 'scan' && !stream) startCamera();
+  if (id === 'invoices' && !invStream) startInvCamera();
 }
+
+// Phone screen off / app in background → release the camera; back → restart on the current tab
+function anyModalOpen() { return !!document.querySelector('.modal-overlay.show'); }
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    if (anyModalOpen()) return;
+    if (stream) stopCamera();
+    if (invStream) stopInvCamera();
+  } else {
+    if (anyModalOpen()) return;
+    const dead = st => !st || st.getVideoTracks().every(t => t.readyState === 'ended');
+    if (currentPage === 'scan' && dead(stream)) startCamera();
+    if (currentPage === 'invoices' && dead(invStream)) startInvCamera();
+  }
+});
 
 // ======================== FILE IMPORT ========================
 function onDragOver(e) { e.preventDefault(); document.getElementById('drop-zone').classList.add('dragover'); }
@@ -3144,8 +3182,69 @@ function saveColMap() {
 }
 
 // ======================== SESSION ========================
+// Signature of the receiving scans — changes on any new scan, edit or deletion
+function scansSignature() {
+  let h = 5381;
+  const str = state.scans.map(s => s.timestamp + ':' + s.order_number + ':' + s.client_name + ':' + s.place + ':' + (s.edits ? s.edits.length : 0)).join('|');
+  for (let i = 0; i < str.length; i++) h = ((h * 33) ^ str.charCodeAt(i)) >>> 0;
+  return state.scans.length + '-' + h.toString(36);
+}
+function markTelegramSent() {
+  LS.set('tgSent', { ts: Date.now(), sig: scansSignature() });
+}
+// null = everything OK (no scans, or report sent and nothing changed since)
+function clearSessionWarning() {
+  if (!state.scans.length) return null;
+  const sent = LS.get('tgSent', null);
+  if (!sent || !sent.ts) return { text: '⚠ Звіт НЕ надіслано', sub: 'Сканів у сесії: ' + state.scans.length };
+  if (sent.sig !== scansSignature()) {
+    const t = new Date(sent.ts);
+    return { text: '⚠ Після надсилання є нові скани', sub: 'Звіт надіслано о ' + String(t.getHours()).padStart(2,'0') + ':' + String(t.getMinutes()).padStart(2,'0') + ', після цього скани змінились' };
+  }
+  return null;
+}
+// Called after the 2 s hold on the Import page
 function clearSession() {
-  if (!confirm('Очистити всі дані поточної сесії?')) return;
+  const w = clearSessionWarning();
+  if (!w) { clearSessionNow(); return; }
+  document.getElementById('clear-warn-text').textContent = w.text;
+  document.getElementById('clear-warn-sub').textContent = w.sub;
+  document.getElementById('modal-clear-warn').classList.add('show');
+}
+function closeClearWarn() {
+  document.getElementById('modal-clear-warn').classList.remove('show');
+}
+
+// Hold-to-confirm: fill runs for `ms`, released early → reset, nothing happens
+function setupHoldButton(el, ms, onDone) {
+  if (!el) return;
+  const fill = el.querySelector('.hold-fill');
+  let raf = null, t0 = 0, done = false;
+  const reset = () => { if (raf) cancelAnimationFrame(raf); raf = null; t0 = 0; fill.style.width = '0'; };
+  const step = () => {
+    const p = Math.min(1, (Date.now() - t0) / ms);
+    fill.style.width = (p * 100) + '%';
+    if (p >= 1) { raf = null; done = true; try { navigator.vibrate && navigator.vibrate(60); } catch (e) {} setTimeout(() => { fill.style.width = '0'; onDone(); }, 80); return; }
+    raf = requestAnimationFrame(step);
+  };
+  el.addEventListener('pointerdown', e => {
+    e.preventDefault(); done = false; t0 = Date.now(); reset(); t0 = Date.now();
+    try { el.setPointerCapture(e.pointerId); } catch (er) {}
+    raf = requestAnimationFrame(step);
+  });
+  const cancel = () => {
+    if (!t0) return;
+    const held = Date.now() - t0;
+    reset();
+    if (!done && held < ms) toast('Утримуй кнопку 2 секунди');
+  };
+  el.addEventListener('pointerup', cancel);
+  el.addEventListener('pointercancel', () => reset());
+  el.addEventListener('contextmenu', e => e.preventDefault());
+}
+
+function clearSessionNow() {
+  closeClearWarn();
   state.registry = {};
   state.scans = [];
   state.registryDates = {};
@@ -3158,6 +3257,7 @@ function clearSession() {
   LS.del('invoices');
   LS.del('invoiceScans');
   LS.del('invoicePlaces');
+  LS.del('tgSent');
   document.getElementById('session-date').textContent = '';
   document.getElementById('date-warning').style.display = 'none';
   stopCamera();
@@ -3697,6 +3797,7 @@ async function exportToTelegram() {
       console.error('TG error for ' + whId, e);
     }
   }
+  if (sent > 0 && !errors) markTelegramSent();
 
   // Send notification list
   const notif = buildNotificationBlob();
@@ -4061,6 +4162,8 @@ populateWarehouseSelects();
 showStatus('idle', 'Очікування сканування', '—', '', null, null, null, null);
 updateSessionDate();
 checkDateConsistency();
+setupHoldButton(document.getElementById('btn-clear-session'), 2000, clearSession);
+setupHoldButton(document.getElementById('btn-clear-force'), 2000, clearSessionNow);
 </script>
 </body>
 </html>
