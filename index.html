@@ -799,7 +799,7 @@ loadScript3('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js
   </div>
   <div class="card">
     <div id="date-warning" style="display:none;background:rgba(255,77,77,0.12);border:1px solid var(--red);border-radius:8px;padding:8px 10px;font-size:12px;color:var(--red);margin-bottom:10px"></div>
-    <div class="stats-grid">
+    <div class="stats-grid" style="grid-template-columns:repeat(2,1fr)">
       <div class="stat-box">
         <div class="stat-val" id="stat-orders">0</div>
         <div class="stat-lbl">Замовлень</div>
@@ -811,6 +811,10 @@ loadScript3('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js
       <div class="stat-box">
         <div class="stat-val" id="stat-scanned">0</div>
         <div class="stat-lbl">Відскановано</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-val" id="stat-clients">0</div>
+        <div class="stat-lbl">Клієнтів (купок)</div>
       </div>
     </div>
   </div>
@@ -1231,7 +1235,7 @@ const LS = {
   del: k => localStorage.removeItem(k)
 };
 
-const APP_VERSION = 'V5.18';
+const APP_VERSION = 'V5.19';
 
 let state = {
   registry: {}, // { warehouse: [ {order_number, client_name, expected_places} ] }
@@ -1642,10 +1646,12 @@ function updateSessionDate() {
 
 function updateImportStats() {
   let totalOrders = 0, totalPlaces = 0;
+  const clients = new Set();   // V5.19: one pile per client, across all warehouses
   Object.values(state.registry).forEach(rows => {
     totalOrders += rows.length;
-    rows.forEach(r => totalPlaces += r.expected_places || 0);
+    rows.forEach(r => { totalPlaces += r.expected_places || 0; const n = normName(r.client_name); if (n) clients.add(n); });
   });
+  document.getElementById('stat-clients').textContent = clients.size;
   document.getElementById('stat-orders').textContent = totalOrders;
   document.getElementById('stat-places').textContent = totalPlaces;
   document.getElementById('stat-scanned').textContent = state.scans.length;
