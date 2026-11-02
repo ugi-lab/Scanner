@@ -799,7 +799,7 @@ loadScript3('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js
   </div>
   <div class="card">
     <div id="date-warning" style="display:none;background:rgba(255,77,77,0.12);border:1px solid var(--red);border-radius:8px;padding:8px 10px;font-size:12px;color:var(--red);margin-bottom:10px"></div>
-    <div class="stats-grid" style="grid-template-columns:repeat(2,1fr)">
+    <div class="stats-grid" style="grid-template-columns:repeat(4,1fr);gap:6px">
       <div class="stat-box">
         <div class="stat-val" id="stat-orders">0</div>
         <div class="stat-lbl">Замовлень</div>
@@ -814,7 +814,7 @@ loadScript3('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js
       </div>
       <div class="stat-box">
         <div class="stat-val" id="stat-clients">0</div>
-        <div class="stat-lbl">Клієнтів (купок)</div>
+        <div class="stat-lbl">Клієнтів</div>
       </div>
     </div>
   </div>
@@ -1235,7 +1235,7 @@ const LS = {
   del: k => localStorage.removeItem(k)
 };
 
-const APP_VERSION = 'V5.19';
+const APP_VERSION = 'V5.20';
 
 let state = {
   registry: {}, // { warehouse: [ {order_number, client_name, expected_places} ] }
