@@ -255,6 +255,9 @@ loadScript3('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js
   .hold-btn { position: relative; overflow: hidden; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; touch-action: none; }
   .hold-btn .hold-fill { position: absolute; left: 0; top: 0; bottom: 0; width: 0; background: rgba(255,77,77,0.55); pointer-events: none; }
   .hold-btn .hold-label { position: relative; pointer-events: none; color: #fff; }
+  #modal-reg-gate .gate-text, #modal-first3 .gate-text { font-size: 21px; font-weight: 800; color: var(--red); text-align: center; line-height: 1.3; margin: 4px 0 10px; text-transform: uppercase; }
+  #modal-reg-gate .gate-sub, #modal-first3 .gate-sub { font-size: 14px; color: var(--text); text-align: center; margin-bottom: 18px; line-height: 1.45; }
+  #session-date.bad { color: var(--red) !important; font-weight: 700; }
   #modal-clear-warn .clear-warn-text { font-size: 22px; font-weight: 800; color: var(--red); text-align: center; line-height: 1.25; margin: 6px 0 18px; text-transform: uppercase; }
   #modal-clear-warn .clear-warn-sub { font-size: 13px; color: var(--text2); text-align: center; margin-bottom: 16px; }
   .btn-full { width: 100%; }
@@ -873,7 +876,7 @@ loadScript3('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js
 
   <!-- Camera buttons — ABOVE camera so always visible -->
   <div class="cam-btns">
-    <button class="btn btn-primary" id="btn-start" onclick="startCamera()" style="flex:2">▶ Запустити</button>
+    <button class="btn btn-primary" id="btn-start" onclick="scanCameraStart()" style="flex:2">▶ Запустити</button>
     <button class="btn btn-secondary" id="btn-stop" onclick="stopCamera()" style="flex:1;display:none">⏹ Стоп</button>
     <button class="btn btn-secondary" onclick="flipCamera()" id="btn-flip" title="Змінити камеру" style="display:none">🔄</button>
   </div>
@@ -1042,6 +1045,30 @@ loadScript3('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js
     <div style="display:flex;flex-direction:column;gap:10px">
       <button class="btn btn-danger btn-full hold-btn" id="btn-clear-force" style="padding:14px"><span class="hold-fill"></span><span class="hold-label">Все одно очистити (утримуй 2 с)</span></button>
       <button class="btn btn-secondary btn-full" style="padding:14px" onclick="closeClearWarn()">Скасувати</button>
+    </div>
+  </div>
+</div>
+
+<!-- ======================== REGISTRY DATE GATE (V5.23) ======================== -->
+<div class="modal-overlay" id="modal-reg-gate">
+  <div class="modal">
+    <div class="gate-text" id="reg-gate-text">⛔ Реєстр старий</div>
+    <div class="gate-sub" id="reg-gate-sub"></div>
+    <div style="display:flex;flex-direction:column;gap:10px">
+      <button class="btn btn-primary btn-full" style="padding:14px" onclick="closeRegGate(); showPage('import')">→ До імпорту</button>
+      <button class="btn btn-danger btn-full hold-btn" id="btn-gate-force" style="padding:14px"><span class="hold-fill"></span><span class="hold-label">Сканувати все одно (утримуй 2 с)</span></button>
+    </div>
+  </div>
+</div>
+
+<!-- ======================== FIRST 3 OFF-REGISTRY (V5.23) ======================== -->
+<div class="modal-overlay" id="modal-first3">
+  <div class="modal">
+    <div class="gate-text">⚠ Перші 3 замовлення поза реєстром</div>
+    <div class="gate-sub" id="first3-sub"></div>
+    <div style="display:flex;flex-direction:column;gap:10px">
+      <button class="btn btn-primary btn-full" style="padding:14px" onclick="first3ToImport()">→ До імпорту</button>
+      <button class="btn btn-secondary btn-full" style="padding:14px" onclick="first3Continue()">Продовжити</button>
     </div>
   </div>
 </div>
@@ -1235,7 +1262,7 @@ const LS = {
   del: k => localStorage.removeItem(k)
 };
 
-const APP_VERSION = 'V5.20';
+const APP_VERSION = 'V5.23';
 
 let state = {
   registry: {}, // { warehouse: [ {order_number, client_name, expected_places} ] }
@@ -1299,12 +1326,12 @@ function showPage(id) {
   const idx = pages.indexOf(id);
   if (idx >= 0) tabs[idx].classList.add('active');
 
-  if (id === 'import') { updateImportStats(); renderImportedList(); populateWarehouseSelects(); }
+  if (id === 'import') { updateImportStats(); renderImportedList(); populateWarehouseSelects(); checkDateConsistency(); }
   if (id === 'clients') renderClients();
   if (id === 'report') renderReport();
   if (id === 'settings') renderSettings();
   if (id === 'invoices') { updateInvStats(); renderInvRecentScans(); }
-  if (id === 'scan' && !stream) startCamera();
+  if (id === 'scan' && !stream) scanCameraStart();
   if (id === 'invoices' && !invStream) startInvCamera();
 }
 
@@ -1318,7 +1345,7 @@ document.addEventListener('visibilitychange', () => {
   } else {
     if (anyModalOpen()) return;
     const dead = st => !st || st.getVideoTracks().every(t => t.readyState === 'ended');
-    if (currentPage === 'scan' && dead(stream)) startCamera();
+    if (currentPage === 'scan' && dead(stream)) scanCameraStart();
     if (currentPage === 'invoices' && dead(invStream)) startInvCamera();
   }
 });
@@ -1597,6 +1624,7 @@ function applyRecords(records, whId, filename, fileDate) {
   });
 
   if (fileDate) state.registryDates[whId] = fileDate;
+  first3Reset();   // V5.23: new registry → the first-3 check starts again
   saveState(); updateImportStats(); renderImportedList(); checkDateConsistency();
   const whName = getWhName(whId);
   const places = records.reduce((s,r) => s + (r.expected_places||0), 0);
@@ -1606,23 +1634,102 @@ function applyRecords(records, whId, filename, fileDate) {
   toast(tMsg);
 }
 
+// ======================== REGISTRY DATE CHECK (V5.23) ========================
+// Goods are received one day after the registry date; on Monday the registry is Saturday's.
+function fmtDMY(d) { return String(d.getDate()).padStart(2,'0') + '.' + String(d.getMonth()+1).padStart(2,'0') + '.' + d.getFullYear(); }
+function expectedRegistryDate(now) {
+  const d = new Date(now || Date.now()); d.setHours(12, 0, 0, 0);
+  d.setDate(d.getDate() - (d.getDay() === 1 ? 2 : 1));
+  return fmtDMY(d);
+}
+// [] = all fine; otherwise list of { wh, text }
+function registryDateProblems() {
+  const whs = Object.keys(state.registry).filter(w => (state.registry[w] || []).length);
+  const exp = expectedRegistryDate();
+  if (!whs.length) return [{ wh: null, text: 'Реєстри не завантажені' }];
+  const out = [];
+  whs.forEach(w => {
+    const d = state.registryDates[w];
+    if (!d) out.push({ wh: w, text: getWhName(w) + ' — дата реєстру невідома' });
+    else if (d !== exp) out.push({ wh: w, text: getWhName(w) + ' — реєстр за ' + d.slice(0, 5) });
+  });
+  return out;
+}
+// "Сканувати все одно" stays valid until the registries change
+function registrySignature() {
+  return Object.keys(state.registry).sort().map(w => w + ':' + (state.registryDates[w] || '?') + ':' + (state.registry[w] || []).length).join('|');
+}
+function registryGateBlocked() {
+  if (!registryDateProblems().length) return false;
+  return LS.get('regDateOverride') !== registrySignature();
+}
+function showRegGate() {
+  const pr = registryDateProblems();
+  const exp = expectedRegistryDate().slice(0, 5);
+  const none = pr.length === 1 && !pr[0].wh;
+  document.getElementById('reg-gate-text').textContent = none ? '⛔ Реєстри не завантажені' : '⛔ Реєстр не той';
+  document.getElementById('reg-gate-sub').innerHTML = none
+    ? 'Потрібні реєстри за <b>' + exp + '</b>.<br>Завантаж їх на вкладці «Імпорт».'
+    : pr.map(x => '<b>' + x.text + '</b>').join('<br>') + '<br>Потрібен за <b>' + exp + '</b>.<br><br>Очисти сесію і завантаж нові реєстри.';
+  document.getElementById('modal-reg-gate').classList.add('show');
+}
+function closeRegGate() { document.getElementById('modal-reg-gate').classList.remove('show'); }
+function regGateForce() {
+  LS.set('regDateOverride', registrySignature());
+  closeRegGate();
+  if (currentPage === 'scan') startCamera();
+}
+// Camera start on the Сканер tab goes through the date check
+function scanCameraStart() {
+  if (registryGateBlocked()) { if (stream) stopCamera(); showRegGate(); return; }
+  startCamera();
+}
+
 function checkDateConsistency() {
-  const dates = Object.entries(state.registryDates);
-  if (dates.length < 2) {
-    document.getElementById('date-warning').style.display = 'none';
-    updateSessionDate();
-    return;
-  }
-  const firstDate = dates[0][1];
-  const mismatched = dates.filter(([wh, d]) => d !== firstDate);
   const warn = document.getElementById('date-warning');
-  if (mismatched.length) {
+  const pr = registryDateProblems().filter(x => x.wh);
+  if (pr.length) {
     warn.style.display = 'block';
-    warn.innerHTML = '⚠️ Невідповідність дат: ' + mismatched.map(([wh,d]) => getWhName(wh) + ' (' + d + ')').join(', ');
+    warn.innerHTML = '⚠ ' + pr.map(x => x.text).join('<br>⚠ ') + '<br>Потрібен реєстр за ' + expectedRegistryDate().slice(0, 5);
   } else {
     warn.style.display = 'none';
   }
   updateSessionDate();
+  const sd = document.getElementById('session-date');
+  sd.classList.toggle('bad', pr.length > 0);
+  if (pr.length && sd.textContent) sd.textContent = '⚠ ' + sd.textContent.replace(/^[^,]+,\s*/, '') + ' · старий';
+}
+
+// ---------- First 3 orders of the session off-registry (V5.23) ----------
+// { done, orders[] } — done = an order was found in the registry (or the user chose to continue)
+function first3State() { return LS.get('first3') || { done: false, orders: [] }; }
+function first3Reset() { LS.set('first3', { done: false, orders: [] }); }
+function first3Found() { const f = first3State(); if (!f.done) LS.set('first3', { done: true, orders: f.orders }); }
+// Returns true when the alarm was raised (the caller must stop)
+function first3OffRegistry(order_number) {
+  const f = first3State();
+  if (f.done) return false;
+  if (!f.orders.includes(order_number)) f.orders.push(order_number);
+  LS.set('first3', f);
+  if (f.orders.length < 3) return false;
+  stopCamera();
+  beep('error');
+  document.getElementById('first3-sub').innerHTML =
+    f.orders.slice(0, 3).map(o => fmtOrder(o)).join('<br>') +
+    '<br><br>Схоже, завантажено не той реєстр. Перевір дату реєстру на вкладці «Імпорт».';
+  document.getElementById('modal-first3').classList.add('show');
+  return true;
+}
+function first3Continue() {
+  const f = first3State(); LS.set('first3', { done: true, orders: f.orders });
+  document.getElementById('modal-first3').classList.remove('show');
+  blockScanning(0);
+  if (currentPage === 'scan') startCamera();
+}
+function first3ToImport() {
+  first3Reset();
+  document.getElementById('modal-first3').classList.remove('show');
+  showPage('import');
 }
 
 function updateSessionDate() {
@@ -1764,6 +1871,8 @@ function processScan(raw, forced = false, isManual = false) {
   }
 
   const reg = findInRegistry(order_number);
+  if (!reg && first3OffRegistry(order_number)) { showStatus('red', '❌ Не в реєстрі', order_number, null, null, place, total); return; }
+  if (reg) first3Found();
   if (!reg) {
     // Unknown order — auto-detect Center from QR format
     const isCenterQR = /^QR-/i.test(raw);
@@ -1795,7 +1904,7 @@ function processScan(raw, forced = false, isManual = false) {
 
   // Check overcount
   if (expected && fact > expected) {
-    showStatus('red', '⚠️ Перевищення!', reg.client_name, order_number, fact, place, total, expected, null);
+    showStatus('red', '⚠️ Перевищення!', reg.client_name, order_number, fact, place, total, expected, deliveryInfoFor(reg));
     beep('error');
     toast(`⚠️ Очікується ${expected}, вже ${fact}`);
     recordScan(order_number, reg.client_name, reg.warehouse, place, total, isManual, expected, rawQR, paCode);
@@ -1815,17 +1924,8 @@ function processScan(raw, forced = false, isManual = false) {
     color = 'blue';
     label = '🔵 +1 місце';
   }
-  // Build delivery info
-  let deliveryInfo = null;
-  if (reg.delivery_city && reg.delivery_city.toUpperCase().includes('УЖГОРОД СКЛАД')) {
-    deliveryInfo = { type: 'pickup', text: '🏠 САМОВИВІЗ' };
-  } else if (reg.delivery_address && reg.delivery_address.trim()) {
-    const addr = reg.delivery_address.trim();
-    // Ignore if address is too short or contains only "вул" without actual street name
-    if (addr.length > 5 && !/^вул\.?\s*$/i.test(addr)) {
-      deliveryInfo = { type: 'address', text: '📍 ' + addr };
-    }
-  }
+  // Build delivery info (address / САМОВИВІЗ of this very order)
+  const deliveryInfo = deliveryInfoFor(reg);
 
   showStatus(color, label, reg.client_name, order_number, fact, place, total, expected, deliveryInfo);
   beep(isFirstForClient ? 'success' : 'info');
@@ -1838,6 +1938,39 @@ function processScan(raw, forced = false, isManual = false) {
   } else {
     document.getElementById('warning-banner').classList.remove('show');
   }
+}
+
+// ---------- Delivery hint (V5.21) ----------
+function isPickupRow(r) { return !!(r.delivery_city && r.delivery_city.toUpperCase().includes('УЖГОРОД СКЛАД')); }
+// Real address only: empty, "вул." / "вул. " alone are ignored; short village names ("Минай") are kept
+function cleanAddress(a) {
+  const addr = String(a || '').trim();
+  if (!addr || /^вул\.?\s*,?\s*$/i.test(addr)) return '';
+  return addr;
+}
+// Text for one registry row; САМОВИВІЗ does not hide an address written on the order (V5.22)
+function deliveryTextFor(r) {
+  const addr = cleanAddress(r.delivery_address);
+  if (isPickupRow(r)) return '🏠 САМОВИВІЗ' + (addr ? ' · 📍 ' + addr : '');
+  return addr ? '📍 ' + addr : '';
+}
+function deliveryInfoFor(reg) {
+  if (!reg) return null;
+  const t = deliveryTextFor(reg);
+  return t ? { type: isPickupRow(reg) ? 'pickup' : 'address', text: t } : null;
+}
+// Order not in the registry: take the client's other orders of today
+function deliveryInfoForClient(name) {
+  const n = normName(name);
+  const opts = [];
+  Object.values(state.registry).forEach(rows => rows.forEach(r => {
+    if (normName(r.client_name) !== n) return;
+    const t = deliveryTextFor(r);
+    if (t && !opts.some(o => o.toLowerCase() === t.toLowerCase())) opts.push(t);
+  }));
+  if (!opts.length) return null;
+  if (opts.length === 1) return { type: opts[0].startsWith('🏠') ? 'pickup' : 'address', text: opts[0] };
+  return { type: 'address', text: 'Різні адреси: ' + opts.join(' · ') };
 }
 
 function recordScan(order_number, client_name, warehouse, place, total, manual, expected, rawQR, paCode) {
@@ -2671,7 +2804,7 @@ function confirmManualClient() {
   const fact = getScanCount(order_number) + 1;
   // Same signals as a normal scan: green + high beep for the client's first place, blue otherwise
   const isFirstForClient = !state.scans.some(s => normName(s.client_name) === normName(name));
-  showStatus(isFirstForClient ? 'green' : 'blue', isFirstForClient ? '🟢 Перше місце' : '🔵 +1 місце', name, order_number, fact, place, total, null);
+  showStatus(isFirstForClient ? 'green' : 'blue', isFirstForClient ? '🟢 Перше місце' : '🔵 +1 місце', name, order_number, fact, place, total, null, deliveryInfoForClient(name));
   beep(isFirstForClient ? 'success' : 'info');
   recordScan(order_number, name, warehouse, place, total, true, null, rawQR);
   closeModal();
@@ -3264,6 +3397,9 @@ function clearSessionNow() {
   LS.del('invoiceScans');
   LS.del('invoicePlaces');
   LS.del('tgSent');
+  LS.del('regDateOverride');
+  LS.del('first3');
+  checkDateConsistency();
   document.getElementById('session-date').textContent = '';
   document.getElementById('date-warning').style.display = 'none';
   stopCamera();
@@ -4170,6 +4306,7 @@ updateSessionDate();
 checkDateConsistency();
 setupHoldButton(document.getElementById('btn-clear-session'), 2000, clearSession);
 setupHoldButton(document.getElementById('btn-clear-force'), 2000, clearSessionNow);
+setupHoldButton(document.getElementById('btn-gate-force'), 2000, regGateForce);
 </script>
 </body>
 </html>
