@@ -1262,7 +1262,7 @@ const LS = {
   del: k => localStorage.removeItem(k)
 };
 
-const APP_VERSION = 'V5.23';
+const APP_VERSION = 'V5.24';
 
 let state = {
   registry: {}, // { warehouse: [ {order_number, client_name, expected_places} ] }
@@ -1625,6 +1625,7 @@ function applyRecords(records, whId, filename, fileDate) {
 
   if (fileDate) state.registryDates[whId] = fileDate;
   first3Reset();   // V5.23: new registry → the first-3 check starts again
+  refreshClientBookSilently();   // V5.24
   saveState(); updateImportStats(); renderImportedList(); checkDateConsistency();
   const whName = getWhName(whId);
   const places = records.reduce((s,r) => s + (r.expected_places||0), 0);
@@ -3726,17 +3727,43 @@ async function loadClientBookFromDrive() {
   }
 }
 
+function parseClientBook(buf) {
+  const wb = XLSX.read(buf, { type: 'array' });
+  const ws = wb.Sheets[wb.SheetNames[0]];
+  const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+  const clients = [];
+  for (let i = 1; i < rows.length; i++) {
+    const code = String(rows[i][0] || '').trim();
+    const name = String(rows[i][1] || '').trim();
+    if (code && name) clients.push({ code, name });
+  }
+  return clients;
+}
+
+// V5.24: refresh the client book quietly whenever registries are loaded.
+// No messages; the old book stays unless the new one downloaded and has clients.
+let clientBookSilentAt = 0;
+async function refreshClientBookSilently() {
+  if (Date.now() - clientBookSilentAt < 60000) return;   // once per import batch
+  clientBookSilentAt = Date.now();
+  try {
+    if (!navigator.onLine) return;
+    const fileInfo = await findDriveFileId('Клієнти.xlsx');
+    if (!fileInfo) return;
+    const buf = await downloadDriveFileById(fileInfo.id, fileInfo.mimeType);
+    const clients = parseClientBook(buf);
+    if (!clients.length) return;
+    state.clientBook = clients;
+    saveState();
+    updateClientBookStat();
+  } catch (e) {
+    console.warn('Client book silent refresh failed', e);
+  }
+}
+
 function importClientBook(buf) {
   try {
-    const wb = XLSX.read(buf, { type: 'array' });
-    const ws = wb.Sheets[wb.SheetNames[0]];
-    const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
-    const clients = [];
-    for (let i = 1; i < rows.length; i++) {
-      const code = String(rows[i][0] || '').trim();
-      const name = String(rows[i][1] || '').trim();
-      if (code && name) clients.push({ code, name });
-    }
+    const clients = parseClientBook(buf);
     state.clientBook = clients;
     saveState();
     updateClientBookStat();
